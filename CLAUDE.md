@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. Keep this file current when behaviour, commands or
-invariants change.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Keep it current when behaviour, commands or invariants change.
 
 ## What this is
 ScholarMatch: a scholarship matcher for VA/NC/SC students. Python 3.12+, Streamlit UI, SQLite, a
@@ -9,10 +9,32 @@ supervised multi-agent LLM pipeline. Course final project (ADSAI).
 Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scraping rules: `scraper-brief.md`.
 
 ## Commands
+- Install: `pip install -r requirements.txt`
 - Tests: `python -m pytest -q` (no network or key needed; must stay green)
+  - One test: `python -m pytest -q tests/test_pipeline.py::test_no_pii_reaches_agents` (or `-k <substring>`)
+  - `test_units.py` = parsers, rules, rubric; `test_pipeline.py` = Supervisor end-to-end with `FakeLLM`
 - App: `streamlit run app.py` (launch config `scholarmatch` in `.claude/launch.json`, port 8517)
 - Sample catalog, offline: `python scripts/load_sample.py`
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
+  - Sources: `vt`, `usc`, `ecu` (AcademicWorks), `sc_che`, `gsites`, `manual`. USC is large: use
+    `--max-pages N` and re-run (pages cache under `data/http_cache/`; `--no-cache` to refetch).
+  - Output: `data/scholarmatch.db`, `data/export/<source>.jsonl`, `data/export/combined.csv`.
+- Config comes from `.env` (python-dotenv): `ANTHROPIC_API_KEY`, `SM_MODEL_<ROLE>`, `SM_LLM_PROVIDER=openai_compat`
+  + `SM_OPENAI_*`, `SM_DB_PATH`, `SM_MAX_LLM_CANDIDATES` (30), `SM_MAX_RESULTS` (15). See `scholarmatch/config.py`.
+  The README mentions a `.env.example`, but no such file exists.
+
+## Pipeline (big picture)
+Ingest: scraper → `ingest/scam.py` (scam screen) + `ingest/extract_rules.py` (regex criteria) →
+`db.upsert_scholarships` (keyed by content hash).
+Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
+1. `fingerprint` (profile, catalog version, date, all version constants) → if a stored `MatchRun` matches, it is returned unchanged.
+2. SQL filter (scam, deadline, state/school, loans, GPA) → `hard_filter.check` pass/fail/unknown → pre-rank → cap at `SM_MAX_LLM_CANDIDATES`.
+3. For each shortlisted scholarship (in parallel across scholarships): Extractor (criteria + quotes, grounded) → rule re-check →
+   Filter (keep/drop/uncertain; a drop must quote the listing) → Scorer (fit category + evidence) → Verifier
+   (checks claims only, never sees the Scorer's reasoning). Each loop is at most `MAX_SUPERVISOR_ROUNDS` rounds.
+4. `rubric.py` turns categories into points, chance, effort and expected value → saves the `MatchRun` and audit events to the DB.
+Chat (`agents/chat.py`) answers follow-ups on a single scholarship from the listing, the stored rubric and a compacted history.
+Full sequence diagram: `docs/architecture.md`.
 
 ## Do not touch
 - `final_project_reqs_and_arch_jonahs23.qmd` / `.pdf`: the graded original, which must be the student's own
