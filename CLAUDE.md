@@ -96,12 +96,44 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit); 25 tests.
-- Not verified: live calls to Anthropic or an OpenAI-compatible endpoint (no credentials during the build).
-  First live run: watch the **Data & audit** page for `rejected` / `llm_failure` events.
+  audit); 25 tests. Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`.
+- Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
+  returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
+  After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
+- Catalog: 2,467 scraped rows (ECU 1,235, USC 1,000, VT 187, Google Sites 36, SC CHE 9). About 1,000 USC rows have past deadlines.
 - Not built: BigFuture (terms unconfirmed), CareerOneStop (needs user's API credentials + docs), embedded
   Google Docs on counselor pages, PDF rule extraction for SC CHE.
-- The local catalog is only the offline sample until the scrapers are run.
+
+## Still to fix (from manual tests: `docs/manual_test_2026-11-10.md`, `docs/manual_test_2026-11-10_round2.md`)
+False positives still dominate the results. Highest impact first:
+1. **Awards limited to a specific group are not extracted:** children/dependents of employees of X, descendants of
+   a named person, children of tobacco growers, holders of a VA tribal scholarship, VT faculty/staff
+   dependents, club/association members (USATT), community-college transfers. These pass with "Eligibility
+   certainty 100%" and make up most of the VT list. They need a rule (likely fail, or at least unknown + Verify)
+   in `extract_rules.py` and `hard_filter.check`.
+2. **Missing information scores as certain.** A listing with no stated requirements (or title only) gets 100%
+   certainty in `rubric.py`. Missing text should lower certainty, not raise it.
+3. **Locality and school limits are missed:** "students from Northampton or Accomack counties", "graduated
+   from the Chesapeake Public School system", "senior at West Charlotte High School enrolling at Central Piedmont
+   Community College". These need patterns for the county list, the school system/high school, and the destination college.
+4. **Graduate and professional programs** (Clinical Nurse Specialist, Nurse Practitioner, Physician Assistant,
+   Dental Medicine, MSN/DNP) carry no `graduate` level restriction.
+5. **SC CHE programs:** Free Tuition for Residents Over 60 (needs an age rule), SC WINS and Lottery Tuition
+   Assistance (technical/two-year colleges only, so an institution-type rule), SC National Guard CAP (Guard members
+   only; currently just `Military=unknown`), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
+   Fellows are wrongly excluded because the STEM/education/accounting "enhancement" text is read as a major restriction.
+6. **"Out-of-state students"** is not a residency rule (O. C. Thompson).
+7. **Majors named as a department or college still slip through:** "College of Health and Human Sciences"
+   becomes the broad `health sciences` field, so Child Development, Addictions & Rehab and Family & Consumer
+   Science awards pass for nursing students.
+8. **"Incoming freshman" and "enrolled in nursing" for high-school seniors:** awards requiring a declared
+   College of Nursing major should be a Verify for pre-nursing freshmen, not a pass.
+9. **UI:** the run header says "AI-reviewed" even when every item fell back to heuristic (it should count items
+   where `mode == "llm"`). The progress label stays on "Filtering the catalog…" while agents run. Program-support
+   funds (e.g. Andrew and Margaret Little Real Estate fund) show "Award $0.00".
+10. **VT scrape:** check that VT rows have `detail_fetched` (round 1 found title-only rows). Re-scrape without `--max-details` if needed.
+11. **Launch config:** `.claude/launch.json` runs `python`, which is not on PATH on the Mac. Use the venv interpreter
+    (`.venv/bin/python`) or `python3`.
 
 ## Conventions
 - Windows dev box (PowerShell primary; Git Bash available). Use forward-slash paths in code via `pathlib`.
