@@ -19,40 +19,63 @@ STATE_NAMES = {"virginia": "VA", "north carolina": "NC", "south carolina": "SC",
                "tennessee": "TN", "maryland": "MD", "west virginia": "WV", "kentucky": "KY",
                "florida": "FL", "pennsylvania": "PA", "new york": "NY", "texas": "TX", "california": "CA",
                "ohio": "OH", "alabama": "AL", "delaware": "DE", "new jersey": "NJ", "district of columbia": "DC"}
-# field of study -> (group, keywords). A student in any field of a group matches a scholarship for the group.
+# field of study -> (group, keywords, parent). A scholarship for a field accepts students in that field or in
+# any of its sub-fields (parent -> child); it does not accept students in a sibling field. So "engineering"
+# accepts a mechanical engineering student, but "computer engineering" does not, and "dentistry" never
+# accepts a nursing student. `group` is only a coarse label kept for display / grouping.
 FIELDS = {
-    "engineering": ("engineering", r"engineer(ing)?"),
-    "computer science": ("computing", r"computer science|computing|software|information technology|cybersecurity|data science"),
-    "business": ("business", r"business|management|entrepreneur"),
-    "accounting": ("business", r"accounting|accountancy"),
-    "finance": ("business", r"finance|financial planning"),
-    "marketing": ("business", r"marketing"),
-    "economics": ("business", r"economics"),
-    "hospitality": ("business", r"hospitality|tourism"),
-    "education": ("education", r"education|teaching|teacher"),
-    "nursing": ("health", r"nursing|nurse"),
-    "health sciences": ("health", r"pre-?med|medicine|medical|public health|health sciences?|pharmacy|kinesiology|nutrition|dietetics"),
-    "veterinary": ("health", r"veterinar"),
-    "agriculture": ("agriculture", r"agricultur|agribusiness|animal science|dairy|horticultur|crop|agronomy|food science"),
-    "natural resources": ("agriculture", r"forestry|natural resources|wildlife|environmental science|conservation|fisher"),
-    "architecture": ("design", r"architecture|landscape architecture|interior design|industrial design"),
-    "construction": ("design", r"building construction|construction"),
-    "biology": ("science", r"biolog|biochem|microbiology|neuroscience"),
-    "chemistry": ("science", r"chemistry"),
-    "physics": ("science", r"physics"),
-    "geosciences": ("science", r"geolog|geoscience|meteorolog"),
-    "mathematics": ("math", r"mathematic|statistics|actuarial"),
-    "psychology": ("social science", r"psycholog"),
-    "political science": ("social science", r"political science|public policy|international (studies|relations)|government"),
-    "sociology": ("social science", r"sociolog|social work|criminal justice|criminolog"),
-    "history": ("humanities", r"history"),
-    "english": ("humanities", r"english|creative writing|literature"),
-    "languages": ("humanities", r"foreign language|spanish|french|german|linguistics"),
-    "philosophy": ("humanities", r"philosophy|religio"),
-    "communication": ("communication", r"communications?|journalism|public relations|media"),
-    "music": ("arts", r"music"),
-    "arts": ("arts", r"\bart\b|\barts\b|theatre|theater|dance|studio art|graphic design|cinema|film"),
-    "law": ("law", r"\blaw\b|pre-?law|legal"),
+    "engineering": ("engineering", r"engineer(ing)?", None),
+    "mechanical engineering": ("engineering", r"mechanical (and \w+ )?engineer", "engineering"),
+    "electrical engineering": ("engineering", r"electrical (and computer )?engineer", "engineering"),
+    "computer engineering": ("engineering", r"computer engineer", "engineering"),
+    "civil engineering": ("engineering", r"civil (and environmental )?engineer", "engineering"),
+    "chemical engineering": ("engineering", r"chemical engineer", "engineering"),
+    "biomedical engineering": ("engineering", r"biomedical engineer|bioengineer", "engineering"),
+    "industrial engineering": ("engineering", r"industrial (and systems )?engineer", "engineering"),
+    "aerospace engineering": ("engineering", r"aerospace (and ocean )?engineer", "engineering"),
+    "computer science": ("computing", r"computer science|computing|software|information technology|information systems|cybersecurity|data science", None),
+    "business": ("business", r"business|management|entrepreneur", None),
+    "accounting": ("business", r"accounting|accountancy", "business"),
+    "finance": ("business", r"finance|financial planning", "business"),
+    "marketing": ("business", r"marketing", "business"),
+    "economics": ("business", r"economics", "business"),
+    "hospitality": ("business", r"hospitality|tourism", "business"),
+    "merchandising": ("design", r"merchandising|fashion|apparel", None),
+    "education": ("education", r"education|teaching|teacher", None),
+    "health sciences": ("health", r"health sciences?|allied health|pre-?health", None),
+    "nursing": ("health", r"nursing|nurse", "health sciences"),
+    "advanced practice nursing": ("health", r"nurse practitioner|clinical nurse specialist|nurse anesthe|doctor of nursing practice|\bdnp\b", "nursing"),
+    "medicine": ("health", r"pre-?med|(?<!dental )(?<!veterinary )medicine|\bmedical\b", "health sciences"),
+    "dentistry": ("health", r"dental|dentist", "health sciences"),
+    "pharmacy": ("health", r"pharmac", "health sciences"),
+    "physician assistant": ("health", r"physician assistant", "health sciences"),
+    "occupational therapy": ("health", r"occupational therap", "health sciences"),
+    "physical therapy": ("health", r"physical therap", "health sciences"),
+    "recreational therapy": ("health", r"recreational therap", "health sciences"),
+    "public health": ("health", r"public health", "health sciences"),
+    "nutrition": ("health", r"nutrition|dietetic", "health sciences"),
+    "kinesiology": ("health", r"kinesiology|exercise science", "health sciences"),
+    "veterinary": ("health", r"veterinar", "health sciences"),
+    "agriculture": ("agriculture", r"agricultur|agribusiness|animal science|dairy|horticultur|crop|agronomy|food science", None),
+    "natural resources": ("agriculture", r"forestry|natural resources|wildlife|environmental science|conservation|fisher", "agriculture"),
+    "architecture": ("design", r"architecture|landscape architecture|interior design|industrial design", None),
+    "construction": ("design", r"building construction|construction", "architecture"),
+    "biology": ("science", r"biolog|biochem|microbiology|neuroscience", None),
+    "chemistry": ("science", r"chemistry", None),
+    "physics": ("science", r"physics", None),
+    "geosciences": ("science", r"geolog|geoscience|meteorolog", None),
+    "mathematics": ("math", r"mathematic|statistics|actuarial", None),
+    "psychology": ("social science", r"psycholog", None),
+    "political science": ("social science", r"political science|public policy|international (studies|relations)|government", None),
+    "sociology": ("social science", r"sociolog|social work|criminal justice|criminolog", None),
+    "history": ("humanities", r"history", None),
+    "english": ("humanities", r"english|creative writing|literature", None),
+    "languages": ("humanities", r"foreign language|spanish|french|german|linguistics", None),
+    "philosophy": ("humanities", r"philosophy|religio", None),
+    "communication": ("communication", r"communications?|journalism|public relations|media", None),
+    "arts": ("arts", r"\bart\b|(?<!liberal )\barts\b|theatre|theater|dance|studio art|graphic design|cinema|film", None),
+    "music": ("arts", r"music", "arts"),
+    "law": ("law", r"\blaw\b|pre-?law|legal", None),
 }
 _MAJOR_TRIGGER = re.compile(
     r"major(ing|s)? in|majors?\b|pursuing (a|an)? ?(degree|career|bachelor'?s?|studies) in|degree in|studying|"
@@ -72,15 +95,42 @@ def sentences(text: str) -> list[str]:
     return [squash(p) for p in parts if squash(p)]
 
 
+def field_keys(label: str) -> set[str]:
+    """Fields named in one label or sentence. A broad field is dropped when one of its sub-fields is also
+    named ("Computer Engineering" -> computer engineering, not engineering)."""
+    low = label.lower().strip()
+    if low in FIELDS:                      # already a field key (rule-extracted criteria store key names)
+        return {low}
+    return _most_specific({name for name, (_g, rx, _p) in FIELDS.items() if re.search(rx, low)})
+
+
+def _most_specific(keys: set[str]) -> set[str]:
+    return keys - {FIELDS[k][2] for k in keys if FIELDS[k][2]}
+
+
 def field_groups(labels: list[str]) -> set[str]:
-    """Map free-text majors to taxonomy groups (used on both scholarship and student side)."""
-    groups = set()
-    for lab in labels:
-        low = lab.lower()
-        for name, (group, rx) in FIELDS.items():
-            if re.search(rx, low):
-                groups.add(group)
-    return groups
+    """Map free-text majors to coarse taxonomy groups (display only; eligibility uses `field_match`)."""
+    return {FIELDS[k][0] for lab in labels for k in field_keys(lab)}
+
+
+def field_match(wanted: list[str], majors: list[str]) -> str:
+    """Scholarship field restriction vs the student's majors -> "pass" / "unknown" / "fail".
+
+    pass:    same field, or the scholarship names the broader field ("engineering" vs mechanical engineering)
+    unknown: either side can't be mapped, or the student only gave the broader field ("nursing" vs a
+             nurse-practitioner award) - Unknown is not fail
+    fail:    every named field is a different one (nursing vs dentistry, mechanical vs computer engineering)
+    """
+    want = set().union(*(field_keys(w) for w in wanted)) if wanted else set()
+    have = set().union(*(field_keys(m) for m in majors)) if majors else set()
+    if not want or not have:
+        return "unknown"
+    parent = lambda k: FIELDS[k][2]
+    if any(w == h or w == parent(h) for w in want for h in have):
+        return "pass"
+    if any(h == parent(w) for w in want for h in have):
+        return "unknown"
+    return "fail"
 
 
 def _num(tok: str) -> Optional[int]:
@@ -137,9 +187,16 @@ def extract(s: Scholarship) -> Criteria:
         ev["localities"] = next((x for x in hard if c.localities[0] in x), "")
 
     # --- level / class year
-    if re.search(r"high school (senior|student|graduat)|graduating senior|incoming (freshm[ae]n|first[- ]year)|entering freshm[ae]n", low_hard):
+    # On a university's own portal "graduating senior" means a college senior; on a high-school counselor
+    # page it means a high-school senior.
+    college_portal = s.source.startswith("academicworks_")
+    college_grad_senior = college_portal and re.search(r"graduating seniors?\b(?! (are|is) not eligible)", low_hard) and "high school" not in low_hard
+    hs_rx = r"high school (senior|student|graduat)|incoming (freshm[ae]n|first[- ]year)|entering freshm[ae]n"
+    if not college_portal:
+        hs_rx += r"|graduating senior"
+    if re.search(hs_rx, low_hard):
         c.levels.append("hs_senior")
-    if re.search(r"undergraduate|sophomore|junior\b|rising (sophomore|junior|senior)|currently enrolled|current(ly)? (college )?student|full[- ]time student", low_hard):
+    if college_grad_senior or re.search(r"undergraduate|sophomore|junior\b|rising (sophomore|junior|senior)|currently enrolled|current(ly)? (college )?student|full[- ]time student", low_hard):
         c.levels.append("undergrad")
     if re.search(r"graduate student|master'?s|doctoral|ph\.?d|graduate (program|degree|level)|law student|medical student|dvm", low_hard):
         c.levels.append("graduate")
@@ -153,15 +210,17 @@ def extract(s: Scholarship) -> Criteria:
     for sent in hard + ([s.name] if _MAJOR_TRIGGER.search(s.name) else []):
         if not _MAJOR_TRIGGER.search(sent):
             continue
-        for name, (_g, rx) in FIELDS.items():
-            if re.search(rx, sent, re.I) and name not in c.majors:
+        for name in sorted(field_keys(sent), key=list(FIELDS).index):
+            if name not in c.majors:
                 c.majors.append(name)
                 ev.setdefault("majors", sent)
+    # "College of Engineering" next to "majoring in Computer Engineering" is context, not a wider restriction.
+    keep = _most_specific(set(c.majors))
+    c.majors = [m for m in c.majors if m in keep]
     if s.college_or_department and not c.majors:
-        for name, (_g, rx) in FIELDS.items():
-            if re.search(rx, s.college_or_department, re.I):
-                c.majors.append(name)
-                ev.setdefault("majors", s.college_or_department)
+        for name in sorted(field_keys(s.college_or_department), key=list(FIELDS).index):
+            c.majors.append(name)
+            ev.setdefault("majors", s.college_or_department)
 
     # --- need / demographics / status
     def flag(field: str, rx: str, value=True):

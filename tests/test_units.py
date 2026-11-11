@@ -92,3 +92,65 @@ def test_cos_geo_scope_rule():
     assert classify_geo_scope(["NC"], []) == ("nc", ["NC"])
     assert classify_geo_scope(["NC", "SC", "GA"], []) == ("multi_state", ["NC", "SC"])
     assert classify_geo_scope(["TX"], ["TX"]) == ("other_state", [])
+
+
+def test_field_match_uses_specific_fields_not_groups():
+    fm = extract_rules.field_match
+    assert fm(["engineering"], ["Mechanical Engineering"]) == "pass"           # broad award, specific student
+    assert fm(["mechanical engineering"], ["Mechanical Engineering"]) == "pass"
+    assert fm(["Computer Engineering", "Computer Science"], ["Mechanical Engineering"]) == "fail"
+    assert fm(["Dental Medicine"], ["Nursing"]) == "fail"                     # same "health" group, other field
+    assert fm(["Physician Assistant Studies"], ["Nursing"]) == "fail"
+    assert fm(["health sciences"], ["Nursing"]) == "pass"
+    assert fm(["Clinical Nurse Specialist"], ["Nursing"]) == "unknown"        # student gave only the broad field
+    assert fm(["mechanical engineering"], ["Engineering"]) == "unknown"
+    assert fm(["Fashion Merchandising"], ["Nursing"]) == "fail"
+    assert fm(["Underwater basket weaving"], ["Nursing"]) == "unknown"         # unmapped -> never a fail
+    # A sentence naming a sub-field does not also count as the broad field.
+    assert extract_rules.field_keys("majoring in Computer Engineering or Computer Science") == {
+        "computer engineering", "computer science"}
+
+
+def test_hard_filter_major_and_level_checks():
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    nurse = StudentProfile(profile_id="n", state="NC", level="hs_senior", intended_schools=["ecu"], majors=["Nursing"])
+    dental = sch("d", "Griffin Endowed", "This School of Dental Medicine scholarship is for students enrolled in "
+                 "the dental medicine program with demonstrated financial need.",
+                 source="academicworks_ecu", school="ecu", geo_scope="nc")
+    res = {h.name: h.result for h in hard_filter.check(dental, extract_rules.extract(dental), nurse)}
+    assert res["Field of study"] == "fail"
+
+    coop = sch("w", "Kimberly Ware Award", "Recognizes an outstanding graduating senior who completed one or more "
+               "work terms through the Cooperative Education and Internship Program.",
+               source="academicworks_vt", school="vt", geo_scope="va")
+    c = extract_rules.extract(coop)
+    assert "hs_senior" not in c.levels and "undergrad" in c.levels and "senior" in c.class_years
+    hs = StudentProfile(profile_id="h", state="VA", level="hs_senior", intended_schools=["vt"])
+    res = {h.name: h.result for h in hard_filter.check(coop, c, hs)}
+    assert res["Education level"] == "fail"
+
+    # On a high-school counselor page "graduating senior" still means a high-school senior.
+    hs_page = sch("g", "Local Award", "Graduating senior of a North Carolina high school.", source="gsite_test")
+    assert "hs_senior" in extract_rules.extract(hs_page).levels
+
+
+def test_check_names_are_readable():
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    s = sch("c", "Citizens Award", "Applicants must be a U.S. citizen or permanent resident.")
+    c = extract_rules.extract(s)
+    c.us_citizen_or_resident_required = True
+    names = [h.name for h in hard_filter.check(s, c, StudentProfile(profile_id="x", state="VA"))]
+    assert "Citizenship" in names and "U" not in names
+
+
+def test_rule_majors_keep_the_specific_field():
+    s = sch("wil", "Wilson Scholarship", "Awarded to an undergraduate student majoring in Computer Engineering, "
+            "Computer Information Systems, or Computer Science. Supports students in the College of Engineering.")
+    c = extract_rules.extract(s)
+    assert "engineering" not in c.majors and "computer engineering" in c.majors
+    assert extract_rules.field_match(c.majors, ["Mechanical Engineering"]) == "fail"
+    cns = sch("cns", "CNS Award", "The scholarship is intended for students enrolled in the Clinical Nurse "
+              "Specialists programs within the College of Nursing.")
+    assert extract_rules.field_match(extract_rules.extract(cns).majors, ["Nursing"]) == "unknown"

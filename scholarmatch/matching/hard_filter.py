@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 from .. import config, db
-from ..ingest.extract_rules import field_groups
+from ..ingest.extract_rules import field_match
 from ..models import Criteria, HardCheck, Scholarship, StudentProfile
 from ..textutil import norm
 
@@ -99,8 +99,11 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
             add("Locality", "pass" if hit else "fail", f"Limited to {', '.join(c.localities[:3])}.")
 
     if c.levels:
+        upper_years_only = bool(c.class_years) and "freshman" not in c.class_years
         if p.level in c.levels:
             add("Education level", "pass", f"Open to: {', '.join(c.levels)}.")
+        elif p.level == "hs_senior" and upper_years_only:
+            add("Education level", "fail", f"For college {', '.join(c.class_years)}s; you are a high school senior.")
         elif p.level == "hs_senior" and "undergrad" in c.levels and not llm:
             add("Education level", "unknown", "May require current college enrollment; check the listing.")
         elif p.level == "hs_senior" and "undergrad" in c.levels and s.school in student_schools(p):
@@ -119,14 +122,14 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
         if not p.majors:
             add("Field of study", "unknown", f"For {', '.join(c.majors[:4])}; add your major.")
         else:
-            want, have = field_groups(c.majors), field_groups(p.majors)
-            direct = any(norm(a) in norm(b) or norm(b) in norm(a) for a in c.majors for b in p.majors)
-            if direct or (want & have):
-                add("Field of study", "pass", f"For {', '.join(c.majors[:4])}; matches {', '.join(p.majors)}.")
-            elif not want or not have:
-                add("Field of study", "unknown", f"For {', '.join(c.majors[:4])}; could not map to your major.")
-            else:
-                add("Field of study", "fail", f"For {', '.join(c.majors[:4])}; your major is {', '.join(p.majors)}.")
+            # Only "scholarship field inside student's major" counts as a direct hit: "engineering" covers
+            # "Mechanical Engineering", but "Mechanical Engineering" does not cover a student who wrote "Engineering".
+            direct = any(norm(a) in norm(b) for a in c.majors for b in p.majors if norm(a))
+            result = "pass" if direct else field_match(c.majors, p.majors)
+            detail = {"pass": f"For {', '.join(c.majors[:4])}; matches {', '.join(p.majors)}.",
+                      "unknown": f"For {', '.join(c.majors[:4])}; check that your major ({', '.join(p.majors)}) qualifies.",
+                      "fail": f"For {', '.join(c.majors[:4])}; your major is {', '.join(p.majors)}."}[result]
+            add("Field of study", result, detail)
 
     if c.pell_required:
         add("Pell eligibility", _tri(True, p.pell_eligible), "Requires Pell Grant eligibility.")
@@ -144,12 +147,13 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
             mine = set(p.ethnicities)
             ok = bool(mine & set(c.ethnicities)) or ("Underrepresented minority" in c.ethnicities and bool(mine & _URM))
             add("Background", "pass" if ok else "fail", f"For {', '.join(c.ethnicities)} students.")
-    for field, attr, label in (("disability_required", "disability", "Students with a documented disability."),
-                               ("first_generation_required", "first_generation", "First-generation college students."),
-                               ("military_affiliation_required", "military_affiliation", "Military / veteran affiliation."),
-                               ("us_citizen_or_resident_required", "us_citizen_or_resident", "U.S. citizen or permanent resident.")):
+    for field, attr, name, label in (
+            ("disability_required", "disability", "Disability", "Students with a documented disability."),
+            ("first_generation_required", "first_generation", "First-generation", "First-generation college students."),
+            ("military_affiliation_required", "military_affiliation", "Military", "Military / veteran affiliation."),
+            ("us_citizen_or_resident_required", "us_citizen_or_resident", "Citizenship", "U.S. citizen or permanent resident.")):
         if getattr(c, field):
-            add(label.split(".")[0].split(" /")[0][:28], _tri(True, getattr(p, attr)), label)
+            add(name, _tri(True, getattr(p, attr)), label)
     return out
 
 

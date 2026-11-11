@@ -96,7 +96,7 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit); 21 tests.
+  audit); 25 tests.
 - Not verified: live calls to Anthropic or an OpenAI-compatible endpoint (no credentials during the build).
   First live run: watch the **Data & audit** page for `rejected` / `llm_failure` events.
 - Not built: BigFuture (terms unconfirmed), CareerOneStop (needs user's API credentials + docs), embedded
