@@ -543,3 +543,209 @@ def test_wp4_fields_narrow_and_carry_over():
     assert c1.evidence["destination_schools"] == cf.evidence["destination_schools"]
     assert c2.non_resident_required is True
     assert c2.evidence["non_resident_required"] == co.evidence["non_resident_required"]
+
+
+# ----------------------------------------------------------------------------- WP5: graduate programs, units, majors
+_ECU = dict(source="academicworks_ecu", school="ecu", geo_scope="nc")
+_VT = dict(source="academicworks_vt", school="vt", geo_scope="va")
+
+
+def _p(**kw):
+    from scholarmatch.models import StudentProfile
+    return StudentProfile(profile_id="x", **kw)
+
+
+def _checks(s, p):
+    from scholarmatch.matching import hard_filter
+    return {h.name: h for h in hard_filter.check(s, extract_rules.extract(s), p)}
+
+
+def test_graduate_programs_positive():
+    for text in ("For students enrolled in the Clinical Nurse Specialist (MSN/DNP) program in the College of Nursing.",
+                 "Open to nurse practitioner students.", "For students in the nurse anesthesia program.",
+                 "For DNP students.", "Awarded to a student in the MSN program.",
+                 "For students in the Department of Physician Assistant Studies.",
+                 "For students in the School of Dental Medicine.", "For DMD candidates.",
+                 "For students in the College of Veterinary Medicine.", "Open to DVM students.",
+                 "For incoming students in the Virginia Tech Carilion School of Medicine.",
+                 "Open to medical students.", "For students in the MD program.", "For PharmD candidates.",
+                 "Open to law school students.", "For students pursuing a JD.",
+                 "For students in the Master of Science in Nursing program.", "For students in the MBA program."):
+        c = _ex(text)
+        assert c.levels == ["graduate"], (text, c.levels)
+        assert is_grounded(c.evidence["levels"], f"Example Scholarship\n{text}"), text
+    assert extract_rules.extract(sch("m", "MIT Scholars", "", **_VT)).levels == ["graduate"]     # MIT, VT only
+    assert extract_rules.extract(sch("c", "Growing the Future of Clinical Nurse Specialists", "", **_ECU)).levels == [
+        "graduate"]                                                                                 # listing name
+    # the listing also names undergraduates: graduate is added, not the only level
+    assert set(_ex("Open to BSN and MSN students in the College of Nursing.").levels) == {"undergrad", "graduate"}
+    assert set(_ex("Open to pre-med or medical students.").levels) == {"undergrad", "graduate"}
+
+
+def test_graduate_programs_negative():
+    for text in ("Open to pre-med students.", "For pre-dental students majoring in Biology.",
+                 "Open to pre-veterinary students.", "For pre-PA students.", "For pre-physician assistant students.",
+                 "Open to pre-law students.",
+                 "Mail the application to 100 Main Street, Baltimore, MD 21201.",
+                 "For nursing students who plan to become nurse practitioners.",
+                 "For students who will attend medical school after graduation.",
+                 "Preference given to medical students.",                      # preference stays soft
+                 "For undergraduate students in the College of Nursing.",
+                 "For graduates of a Pitt County high school.",
+                 "Applicants must have graduated from the Chesapeake Public School system.",
+                 "For nursing students with financial need."):
+        assert "graduate" not in _ex(text).levels, (text, _ex(text).levels)
+    assert extract_rules.extract(sch("m", "MIT Scholars", "")).levels == []          # MIT only means a degree at VT
+    assert "graduate" not in extract_rules.extract(sch("m", "Scholarship for MIT alumni children", "", **_ECU)).levels
+    # AcademicWorks fallback: "graduates of" is not graduate level, "graduate students" is
+    assert extract_rules.extract(sch("g", "Garris", "For graduates of a Pitt County high school.", **_ECU)).levels == []
+    assert extract_rules.extract(sch("u", "U", "For undergraduate students.", **_ECU)).levels == ["undergrad"]
+    assert extract_rules.extract(sch("g", "G", "For graduate students in education.", **_ECU)).levels == ["graduate"]
+
+
+def test_graduate_program_check():
+    cns = sch("c", "CNS", "For students enrolled in the Clinical Nurse Specialist (MSN/DNP) program.", **_ECU)
+    assert _checks(cns, _p(state="NC", level="hs_senior", intended_schools=["ecu"], majors=["Nursing"])
+                   )["Education level"].result == "fail"
+    assert _checks(cns, _p(state="NC", level="graduate", current_school="ecu", majors=["Nursing"])
+                   )["Education level"].result == "pass"
+    mit = sch("m", "MIT Scholars", "For students in the Master of Information Technology (MIT) program.", **_VT)
+    grad = _checks(mit, _p(state="VA", level="graduate", current_school="vt", majors=["Information Technology"]))
+    assert all(h.result == "pass" for h in grad.values())
+    assert _checks(mit, _p(state="VA", level="undergrad", current_school="vt", majors=["Computer Science"])
+                   )["Education level"].result == "fail"
+
+
+def test_ordinary_nursing_awards_still_pass_an_undergraduate():
+    nurse = _p(state="NC", level="undergrad", class_year="sophomore", current_school="ecu", majors=["Nursing"])
+    for text in ("For nursing students.", "Applicants must be enrolled in the nursing program.",
+                 "Applicants must have a declared major in the College of Nursing.",
+                 "For BSN students in the College of Nursing.",
+                 "Awarded to a nursing student who plans to become a nurse practitioner."):
+        res = _checks(sch("n", "Nursing Award", text, **_ECU), nurse)
+        assert all(h.result == "pass" for h in res.values()), (text, {k: h.result for k, h in res.items()})
+
+
+def test_new_fields_win_over_broad_ones():
+    fk = extract_rules.field_keys
+    assert fk("Child Development and Family Relations") == {"human development"}
+    assert fk("Family and Consumer Sciences") == {"human development"}
+    assert fk("Human Development and Family Science") == {"human development"}
+    assert fk("Addictions and Rehabilitation Studies") == {"rehabilitation"}
+    assert fk("Communication Sciences and Disorders") == {"communication sciences and disorders"}
+    assert fk("School of Communication") == {"communication"}
+    fm = extract_rules.field_match
+    assert fm(["human development"], ["Nursing"]) == "fail"
+    assert fm(["rehabilitation"], ["Nursing"]) == "fail"
+    assert fm(["communication sciences and disorders"], ["Communication"]) == "fail"
+
+
+def test_units_and_field_wording():
+    assert _ex("For a Child Development and Family Relations student.").majors == ["human development"]
+    assert _ex("For nursing students with financial need.").majors == ["nursing"]
+    assert _ex("For students majoring in Family and Consumer Sciences.").majors == ["human development"]
+    for text in ("Open to all Virginia Tech students.", "For first-generation students.",
+                 "For students with financial need.", "Preference given to nursing students."):
+        assert _ex(text).majors == [], (text, _ex(text).majors)
+    c = _ex("For students in the College of Health and Human Sciences.")
+    assert c.majors_from_unit is True and "health sciences" in c.majors and "human development" in c.majors
+    sci = _ex("Awarded to undergraduate seniors in the College of Science.")
+    assert sci.majors_from_unit is True and "computer science" not in sci.majors and "biology" in sci.majors
+    a_s = _ex("For students in the Thomas Harriot College of Arts and Sciences.")     # not just the `arts` field
+    assert a_s.majors_from_unit and {"arts", "biology", "history"} <= set(a_s.majors) and "nursing" not in a_s.majors
+    assert _ex("For students in the Department of Addictions and Rehabilitation Studies.").majors == ["rehabilitation"]
+    # a named major beats the unit next to it, and "major" wording means the field is not only a unit
+    both = _ex("For students in the College of Engineering majoring in Mechanical Engineering.")
+    assert both.majors == ["mechanical engineering"] and not both.majors_from_unit
+    assert not _ex("Applicants must have a declared major in the College of Nursing.").majors_from_unit
+    # department name on the listing (AcademicWorks field) only
+    d = extract_rules.extract(sch("d", "Dean's Fund", "Recognizes academic achievement.",
+                                  college_or_department="College of Science Dean's Roundtable", **_VT))
+    assert d.majors_from_unit is True and "physics" in d.majors
+
+
+def test_unit_check_is_never_a_certain_pass():
+    nurse = _p(state="NC", level="undergrad", current_school="ecu", majors=["Nursing"])
+    hhs = sch("h", "Pecheles", "For students in the College of Health and Human Sciences.", **_ECU)
+    h = _checks(hhs, nurse)["Field of study"]
+    assert h.result == "unknown" and "College of Health and Human Sciences" in h.detail
+    kin = _p(state="NC", level="undergrad", current_school="ecu", majors=["Kinesiology"])
+    assert _checks(hhs, kin)["Field of study"].result == "pass"             # the unit names the student's field
+    sci = sch("s", "Dean's Roundtable", "Awarded to undergraduate seniors in the College of Science.", **_VT)
+    cs = _p(state="VA", level="undergrad", class_year="senior", current_school="vt", majors=["Computer Science"])
+    assert _checks(sci, cs)["Field of study"].result == "fail"
+    bio = cs.model_copy(update={"majors": ["Biology"]})
+    assert _checks(sci, bio)["Field of study"].result == "pass"
+    clahs = sch("c", "Hughes", "For students in the College of Liberal Arts and Human Sciences (CLAHS).", **_VT)
+    assert _checks(clahs, cs)["Field of study"].result == "fail"
+    assert _checks(clahs, cs.model_copy(update={"majors": ["History"]}))["Field of study"].result == "pass"
+
+
+def test_declared_major():
+    for text in ("Applicants must have a declared major in the College of Nursing.",
+                 "Students must be admitted to the College of Nursing.",
+                 "Applicants must be enrolled in the nursing program.",
+                 "Must be accepted into the Physical Therapy program."):
+        c = _ex(text)
+        assert c.declared_major_required is True, text
+        assert is_grounded(c.evidence["declared_major_required"], f"Example Scholarship\n{text}"), text
+    for text in ("Students who have not yet declared a major in nursing may apply.",
+                 "Open to students enrolled in a degree program at ECU.",
+                 "For pre-nursing students who intend to apply to the nursing program.",
+                 "For nursing students with financial need.",
+                 "Preference given to students admitted to the nursing program."):
+        assert not _ex(text).declared_major_required, text
+    legion = sch("l", "American Legion Post #39", "Applicants must be enrolled in the nursing program.", **_ECU)
+    hs = _checks(legion, _p(state="NC", level="hs_senior", intended_schools=["ecu"], majors=["Nursing"]))
+    assert hs["Field of study"].result == "unknown" and "declared major" in hs["Field of study"].detail
+    ug = _checks(legion, _p(state="NC", level="undergrad", current_school="ecu", majors=["Nursing"]))
+    assert ug["Field of study"].result == "pass"
+    assert _checks(legion, _p(state="NC", level="hs_senior", intended_schools=["ecu"], majors=["Biology"])
+                   )["Field of study"].result == "fail"                    # a different field still fails
+
+
+def test_rising_class_years():
+    s = sch("r", "Morris", "For rising seniors majoring in Multimedia Journalism.", **_VT)
+    c = extract_rules.extract(s)
+    assert c.class_years == ["junior", "senior"]
+    year = lambda y: _checks(s, _p(state="VA", level="undergrad", class_year=y, current_school="vt",
+                                   majors=["Journalism"]))["Class year"].result
+    assert year("junior") == "pass" and year("senior") == "unknown" and year("sophomore") == "fail"
+    soph = sch("r2", "Soph", "For rising sophomores in good academic standing.", **_VT)
+    assert extract_rules.extract(soph).class_years == ["freshman", "sophomore"]
+    assert _checks(soph, _p(state="VA", level="hs_senior", intended_schools=["vt"]))["Education level"].result == "fail"
+    plain = sch("p", "Seniors", "For seniors and rising seniors.", **_VT)
+    assert _checks(plain, _p(state="VA", level="undergrad", class_year="senior", current_school="vt")
+                   )["Class year"].result == "pass"
+
+
+def test_locality_with_another_way_in():
+    tyo = sch("t", "Time Out Youth Scholarship",
+              "Resident of Mecklenburg, Union, Iredell Counties or have accessed Time Out Youth programming.")
+    h = _check(tyo, "Locality", county="Wake")
+    assert h.result == "unknown" and h.weight == "restrictive"
+    assert _check(tyo, "Locality", county="Union").result == "pass"
+    watson = sch("w", "Watson Scholarship", "For students from Northampton or Accomack counties.")
+    assert _check(watson, "Locality", county="Henrico").result == "fail"      # "or" between places is not a way in
+    moss = sch("m", "Moss Scholarship", "For graduates of Radford High School or high schools in Montgomery County.")
+    assert _check(moss, "Locality", county="Loudoun").result == "fail"
+
+
+def test_wp5_fields_carry_over():
+    from scholarmatch.agents.workers import to_criteria
+    from scholarmatch.models import ExtractedCriteria
+    rules = _ex("For students in the College of Health and Human Sciences. Applicants must be enrolled in the "
+                "nursing program.")
+    assert rules.declared_major_required and not rules.majors_from_unit    # nursing is named, so not unit-only
+    unit = _ex("For students in the College of Health and Human Sciences.")
+    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[],
+                          majors=["Health and Human Sciences"], need_based=None, pell_required=None, gender=None,
+                          ethnicities=[], disability_required=None, first_generation_required=None,
+                          military_affiliation_required=None, us_citizen_or_resident_required=None, num_awards=None,
+                          essay_count=None, recommendation_letters=None, transcript=None, interview=None, fafsa=None,
+                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
+                          evidence=[])
+    c1, c2 = to_criteria(x, rules), to_criteria(x, unit)
+    assert c1.declared_major_required is True and c1.evidence["declared_major_required"] == \
+        rules.evidence["declared_major_required"]
+    assert c2.majors_from_unit is True and c2.evidence["majors_from_unit"] == unit.evidence["majors_from_unit"]

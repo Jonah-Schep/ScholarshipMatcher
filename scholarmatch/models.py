@@ -75,6 +75,12 @@ class Criteria(BaseModel):
     levels: list[Level] = Field(default_factory=list)
     class_years: list[str] = Field(default_factory=list)        # freshman, sophomore, junior, senior
     majors: list[str] = Field(default_factory=list)             # fields of study
+    # True when `majors` come only from a college / department name ("students in the College of Health and Human
+    # Sciences"): a field match is then not certain, because the unit holds several majors.
+    majors_from_unit: Optional[bool] = None
+    # "declared major in", "enrolled in the nursing program", "admitted to the College of X": an incoming student
+    # (high-school senior) may not have declared the major yet.
+    declared_major_required: Optional[bool] = None
     need_based: Optional[bool] = None
     pell_required: Optional[bool] = None
     gender: Optional[Literal["female", "male"]] = None

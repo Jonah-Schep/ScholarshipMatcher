@@ -26,20 +26,7 @@ SEVERITY = {"pass": 0, "unknown": 1, "fail": 2}
 XFAIL: dict[str, list[tuple[str, str]]] = {
     # WP3 (awards limited to a specific group): all 12 fixed in rules-3.
     # WP4 (county lists, school systems, high schools, destination college, out-of-state): all 6 fixed in rules-4.
-    "WP5": [  # graduate / professional programs, departments and colleges, declared majors
-        ("College of Science Dean's Roundtable Scholarship", "r1p2"),
-        ("Hallie L. Hughes Scholarship", "r1p2"),
-        ("IMPACT Scholarships (Inclusion improving Medicine, Patient outcomes And Community health with Talent)", "r1p2"),
-        ("Lena L. Giannotti Scholarship for Family and Child Development", "r1p2"),
-        ("MIT Scholars", "r1p2"),
-        ("Growing the Future of Clinical Nurse Specialists", "maya"),
-        ("Addictions and Rehabilitation Studies Inclusion Scholarship", "maya"),
-        ("JB & Vera Congleton Scholarship", "maya"),
-        ("Myrtle Westmoreland Scholarship", "maya"),
-        ("Pecheles Automotive Scholarship", "maya"),
-        ("American Legion Post #39 Scholarship", "maya"),
-        ("Justin Bryce Clark Scholarship", "maya"),
-    ],
+    # WP5 (graduate programs, departments and colleges, declared majors): all 12 fixed in rules-5.
     "WP6": [  # SC CHE: age, institution type, National Guard, enhancement text, HOPE/LIFE supplement
         ("Free Tuition for Residents Over 60", "r1p3"),
         ("Free Tuition for Residents Over 60", "derek"),

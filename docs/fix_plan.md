@@ -15,7 +15,7 @@ ends in one branch and one pull request.
 | WP2 Certainty when information is missing | 2 | WP0 | done (2026-11-12) | `fix/still-to-fix` | `rubric-3`; `HardCheck.weight` + x0.25 chance factor ready for WP3; see "WP2 notes" |
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | done (2026-11-12) | `fix/still-to-fix` | `rules-3`, `rubric-4`; all 12 WP3 xfails fixed, plus 2 SCNG CAP (WP6) ones; Profile form not checked in the running app; see "WP3 notes" |
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | done (2026-11-12) | `fix/still-to-fix` | `rules-4`, `rubric-5`; all 6 WP4 xfails fixed; Locality check semantics changed (see "WP4 notes"); remaining xfails WP5 12, WP6 10 |
-| WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | todo | | |
+| WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | done (2026-11-12) | `fix/still-to-fix` | `rules-5` (no rubric change); all 12 WP5 xfails fixed; Garris `expect` unknown → pass; WP4/WP0 carry-overs done; remaining xfails WP6 10; see "WP5 notes" |
 | WP6 SC CHE programs | 5 | WP5 | todo | | |
 | WP7 Extractor agent learns the new fields | LLM parity | WP6 | todo | | |
 | WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | todo | | needs network + the user |
@@ -542,6 +542,114 @@ undergraduate), CLAHS Faculty Campaign; Pecheles, Congleton, Westmoreland, Addic
 Science Dean's Roundtable vs a CS student; American Legion #39 and Justin Bryce Clark → unknown for Maya,
 pass for an enrolled nursing undergraduate. Keep `test_field_match_uses_specific_fields_not_groups` and
 `test_rule_majors_keep_the_specific_field` green.
+
+### WP5 notes (2026-11-12)
+
+- **Code.** `models.Criteria.majors_from_unit` and `declared_major_required` (both `Optional[bool]`). `extract_rules`:
+  new `FIELDS` `human development`, `rehabilitation` (parent health sciences), `communication sciences and disorders`
+  (parent health sciences; `communication` no longer matches "Communication Sciences and Disorders"); `GRADUATE_PROGRAMS`,
+  `graduate_program`, `_UNIT_RX` / `_UNIT_FIELDS` / `unit_fields` / `unit_name`, `_fields_before_students`,
+  `_sentence_majors`, `declared_major`, `rising_years`, `locality_has_alternative`. `hard_filter`: Field-of-study
+  downgrades, rising class years, Locality "or" alternative. `workers._RULE_ONLY_FIELDS` + `to_criteria` carry the two
+  new flags and their evidence. `RULES_VERSION = "rules-5"`. No rubric number changed, so `RUBRIC_VERSION` stays
+  `rubric-5` (`declared_major_required` was already in `rubric.HARD_CRITERIA_FIELDS`; `majors_from_unit` is a modifier
+  of `majors` and is deliberately not in it). No prompt change, nothing added to `Supervisor._HARD_FIELDS`.
+- **Graduate programs (4).** A hard sentence (the listing name is the first sentence of `full_text()`, so it is included)
+  matching `GRADUATE_PROGRAMS` sets `levels = ["graduate"]` with `evidence["levels"]`; if the listing also names
+  undergraduates (`undergrad`, `bachelor`, `BSN`, `pre-`, freshman … senior, high school, community college, associate)
+  it adds `graduate` (and `undergrad` if no lower level was found) instead. Skipped: a match right after "pre"/"pre-"
+  ("pre-med", "pre-dental", "pre-veterinary", "pre-physician assistant", "pre-law"), and a match after career wording in
+  the same clause ("plan to become", "career", "will attend", "applying to", "interested in"). Short tokens MD, JD, DVM,
+  DMD, DDS, PharmD, MBA, MSN, DNP: case-sensitive whole words, and only next to program wording ("MD program", "DVM
+  students", "(MSN/DNP) program", "pursuing a JD"), so "Baltimore, MD 21201" does not count. `MIT` (case-sensitive) only
+  when `s.school == "vt"`. Deviations from the plan text: "physician assistant" is graduate on any row (all US PA
+  programmes are); "Master of X" needs a capital after "of/in"; "DPT"/OT were not added (not in the plan).
+- **Generic graduate wording (carry-over 1).** `_GRAD_GENERIC` replaces the substring test: whole-word "graduate
+  students/program/degree/level/school/studies", "master's", "doctoral", "Ph.D". Before, "graduate student" also
+  matched inside "undergraduate student" (SC Need-based Grant was `[undergrad, graduate]`, now `[undergrad]`). The
+  AcademicWorks fallback uses `_GRAD_WORD` ("graduate" as a word, not "graduates of", "graduated from", "graduate from /
+  in / this …"). "law student / medical student / dvm" moved from the generic regex into `GRADUATE_PROGRAMS`.
+- **Units and majors (7).** A sentence's `College/School/Department/Division of <Capitalised Name>` spans are cut out;
+  fields named in the rest (behind `_MAJOR_TRIGGER`, or "<Field> student(s)/majors" read from the up-to-six words before
+  "student"/"major", stopping at function words) are the **named** majors; the unit spans give **unit** fields via
+  `_UNIT_FIELDS` (CLAHS, Health and Human Sciences/Services/Performance/Ecology, College of Science, Arts and Sciences,
+  Engineering [+ computer science, since CS is in Engineering at VT, ECU and USC]) or the unit's keywords. If any named
+  majors exist in the listing, they are the majors and units are context (keeps "College of Engineering" + "majoring in
+  Mechanical Engineering" as mechanical only). Otherwise the unit fields (kept whole, no `_most_specific`, so "health
+  sciences" stays next to nutrition etc.) are the majors, and `majors_from_unit = True` when no unit sentence has major
+  wording ("major", "degree in", "program in", "enrolled in the X program", …). With no unit in the text,
+  `s.college_or_department` is read the same way and also sets `majors_from_unit`. In `hard_filter`, with
+  `majors_from_unit`, only a **direct** hit (the scholarship field's name inside the student's major) stays `pass`; a
+  `field_match` pass (parent field, e.g. health sciences ⊃ nursing) becomes `unknown` "For students in the College of
+  X; check that your major is in that college." A fail stays a fail. Side effects: "Arts and Sciences" no longer reads
+  as the `arts` field only (it was a wrong-fail trap for science majors); the `_MAJOR_TRIGGER` now also covers
+  "program in", "concentration in" and "(enrolled|students) in / (accepted|admitted) (in)to … program(s)/major(s)".
+  `social work` was not split from sociology (no corpus case needs it).
+- **Declared major (8).** `declared_major` reads "declared (a) major", "have declared", "admitted/accepted (in)to …
+  program/major/college/school/department", "enrolled in … program(s)/major/curriculum", "enrolled in the College of"
+  when the matched span names a field or a known unit (so "enrolled in a degree program" and "accepted to a four-year
+  college" do not count); skipped for "not yet declared", "undeclared", "intended major", "intend/plan to …", "pre-",
+  negated or preference sentences. Set only when `majors` is non-empty. For `p.level == "hs_senior"` a Field-of-study
+  pass becomes `unknown` ("Requires a declared major in nursing; incoming students may not qualify yet."). Undergraduates
+  are unaffected.
+- **Rising class years (carry-over 2).** "rising X" stores the year below X **and** X (`["junior", "senior"]` for rising
+  seniors), with `evidence["class_years"]` (the first hard sentence naming a year; it was not stored before). Junior →
+  pass. A student whose year is X gets a normal `unknown` ("as a senior now, check whether you still qualify"): timing
+  of profile entry vs the award year is ambiguous, so not a fail (invariant 4), but not a confident pass either. "rising
+  sophomores" does not count as open to incoming freshmen (a high-school senior still fails Education level). A year
+  also named plainly ("seniors and rising seniors") passes.
+- **Locality "or" alternative (carry-over 3).** `locality_has_alternative(sentence, locs)`: after the last locality name
+  in the evidence sentence, " or " followed by non-place wording (have/has/are/be/accessed/participate/member/descendant/
+  child/employee/dependent/spouse/served/currently …). Then a would-be `fail` becomes a **restrictive** unknown
+  ("Mainly for …; you would need to qualify another way the listing names"). "Northampton or Accomack counties" and
+  "Radford High School or high schools in Montgomery County" still fail.
+- **LLM mode / for WP7.** `majors` and `levels` come from the Extractor; the two rule flags are copied onto them. Both
+  only soften a `pass`, so they can never exclude anyone, but: (a) `majors_from_unit` copied from rules may downgrade a
+  pass the Extractor got from explicit major text the rules missed (fail-open, harmless); WP7 should add the flag to
+  `ExtractedCriteria` or recompute it from the LLM evidence quote. (b) LLM `levels` may miss the graduate-only limit the
+  rules found (`evidence["levels"]` from `graduate_program`); WP7 should prefer the rule `["graduate"]` when the rules
+  found a professional program and the Extractor gave no grounded level, or tell the Extractor about it. (c) `class_years`
+  from the Extractor: the rising-year handling reads `evidence["class_years"]`, so it works only if the LLM quote contains
+  the "rising" sentence; WP7 should ask for that quote. (d) WP7 should add `declared_major_required` to the schema (the
+  plan already lists it) and union `majors` with the rule majors only where grounded.
+- **Tests.** `test_units.py` (11 new): graduate positives (18 sentences, evidence grounded, VT "MIT Scholars", listing
+  name, mixed BSN/MSN and pre-med/medical lists), negatives (pre-med/-dental/-veterinary/-PA/-physician assistant/-law,
+  Maryland address, career wording, preference sentence, "undergraduate students", "graduates of", MIT off VT, AcademicWorks
+  fallback), the level check (CNS, MIT pass for a graduate / fail for an undergraduate), ordinary nursing awards all
+  pass for a nursing sophomore (including "plans to become a nurse practitioner"), new fields, unit / "<Field> student"
+  extraction and negatives ("all Virginia Tech students", "first-generation students", a preference sentence), the
+  unit check (Pecheles unknown with the college in the detail, kinesiology passes, College of Science fails CS and
+  passes Biology, CLAHS), declared-major positives / negatives and the check (hs senior unknown, undergraduate pass,
+  other field still fails), rising years, the locality alternative, `to_criteria` carry-over.
+- **xfails.** All 12 WP5 entries removed. Remaining: WP6 10. **One `expect` changed:** Garris / `maya` `unknown` →
+  `pass` (check `Locality`). The old `unknown` came only from the carry-over-1 bug (`levels = [undergrad, graduate]`
+  from "graduates of"); the listing's real rule ("graduates of a Pitt County high school") is met by a Pitt County
+  student, which WP0 already said would be acceptable either way.
+- **Known, not fixed (pre-existing, not WP5).** A single 5,000-character word without spaces takes about 2.7 s in
+  `extract` (10.8 s at 10,000 characters, quadratic), on the WP4 code too; real listings do not contain such tokens,
+  but WP6/WP8 could cap token length in `sentences()`. Ordinary long text (thousands of words) stays linear (~20 ms).
+- **Eval (as of 2026-11-12, rule-based).** Regression corpus (`--corpus`), rules-4 → rules-5:
+  ```
+  profile  eligible matches known_inel inel_top10 elig_lost      (before: eligible / known_inel / inel_top10)
+  r1p1            4       4          0          0         0      (8 / 0 / 0)
+  r1p2           12      12          3          3         0      (14 / 5 / 4)
+  r1p3            5       5          5          5         0
+  r1p4           21      21          0          0         0      (23 / 0 / 0)
+  maya            6       6          1          1         0      (10 / 5 / 5)
+  derek           4       4          3          3         0
+  aisha          19      19         11          3         0      (21 / 11 / 2)
+  sam             6       6          0          0         2
+  total          77      77         23         15         2      (91 / 29 / 19)
+  ```
+  `elig_lost` did not grow (2, both WP6). Maya's remaining one is Pecheles (now a Field-of-study unknown, as the corpus
+  expects). r1p1 lost CNS, Addictions, Congleton, Westmoreland (correct for a nursing student). r1p4 lost CLAHS Faculty
+  Campaign, Hallie Hughes, Skelton (CLAHS, not IT) and gained Dunham (College of Engineering → unknown, was a fail).
+  **Why Aisha's inel_top10 went from 2 to 3:** two correct exclusions (Hallie Hughes: CLAHS vs Business; MIT Scholars:
+  graduate) shrank her list from 21 to 19, so Mossberg (a restrictive "Specific group" unknown, ineligible per the
+  notes) moved up into rank 10. Nothing ineligible gained rank; it is the D1 ranking floor showing through a shorter
+  list. Local catalog: 159 / 104 / 43 / 18 / 2 → **155 / 104 / 41 / 17 / 2** (title-only "MIT Scholars" is now
+  graduate only; "College of Science Dean's Roundtable" gets College-of-Science majors from its department field; SC
+  Need-based Grant drops the spurious `graduate` level).
 
 ## WP6 — SC CHE programs (item 5)
 

@@ -65,14 +65,20 @@ FIELDS = {
     "physics": ("science", r"physics", None),
     "geosciences": ("science", r"geolog|geoscience|meteorolog", None),
     "mathematics": ("math", r"mathematic|statistics|actuarial", None),
+    "rehabilitation": ("health", r"addiction|rehabilitation", "health sciences"),
+    "communication sciences and disorders": ("health", r"communication sciences and disorders|communication disorders|"
+                                                       r"speech[- ]language|audiology", "health sciences"),
     "psychology": ("social science", r"psycholog", None),
+    "human development": ("social science", r"child development|family relations|family and consumer sciences?|"
+                                            r"human development|family science|family studies", None),
     "political science": ("social science", r"political science|public policy|international (studies|relations)|government", None),
     "sociology": ("social science", r"sociolog|social work|criminal justice|criminolog", None),
     "history": ("humanities", r"history", None),
     "english": ("humanities", r"english|creative writing|literature", None),
     "languages": ("humanities", r"foreign language|spanish|french|german|linguistics", None),
     "philosophy": ("humanities", r"philosophy|religio", None),
-    "communication": ("communication", r"communications?|journalism|public relations|media", None),
+    "communication": ("communication", r"communications?(?! (?:sciences and disorders|disorders))|journalism|"
+                                       r"public relations|media", None),
     "arts": ("arts", r"\bart\b|(?<!liberal )\barts\b|theatre|theater|dance|studio art|graphic design|cinema|film", None),
     "music": ("arts", r"music", "arts"),
     "law": ("law", r"\blaw\b|pre-?law|legal", None),
@@ -80,7 +86,74 @@ FIELDS = {
 _MAJOR_TRIGGER = re.compile(
     r"major(ing|s)? in|majors?\b|pursuing (a|an)? ?(degree|career|bachelor'?s?|studies) in|degree in|studying|"
     r"enrolled in (the )?(college|school|department|program)|students? (in|of|within) the (college|school|department)|"
-    r"(college|school|department) of", re.I)
+    r"(college|school|department) of|\bprogram in\b|\bconcentration in\b|"
+    r"\b(?:(?:enrolled|students?) in|(?:accepted|admitted) (?:in)?to) (?:the |a |an )?(?:[\w&'’()/-]+ ){1,6}?"
+    r"(?:programs?|majors?|curriculum)\b", re.I)
+# Wording that names the major itself; a sentence with a College/School/Department name but none of this wording
+# only tells us the unit ("For students in the College of Health and Human Sciences").
+_MAJOR_WORDS = re.compile(r"\bmajor(?:s|ing|ed)?\b|\bdegree in\b|\bstudying\b|\bprogram in\b|\bconcentration in\b|"
+                          r"\bpursuing (?:a|an)? ?(?:degree|bachelor'?s?|studies) in\b|"
+                          r"\benrolled in (?:the |a |an )?(?:[\w&'’()/-]+ ){1,6}?(?:programs?|majors?|curriculum)\b", re.I)
+# "College of Liberal Arts and Human Sciences", "School of Dental Medicine", "Department of Addictions and
+# Rehabilitation Studies". The unit name is capitalised; it stops at the first lower-case word ("…Sciences who").
+_UNIT_RX = re.compile(r"\b((?i:college|school|department|dept\.?|division) of (?:the )?"
+                      r"((?-i:[A-Z][\w'’-]*)(?:,? (?:(?:and|&) )?(?:of )?(?-i:[A-Z][\w'’-]*))*))")
+_SCIENCES = ["biology", "chemistry", "physics", "geosciences", "mathematics", "psychology", "economics"]
+_HUMANITIES = ["history", "english", "languages", "philosophy", "political science", "sociology", "communication"]
+# Units whose name does not map to the right fields by keyword: broad colleges get the fields they hold at VT / ECU /
+# USC (so "College of Science" does not admit a computer science student, who is in Engineering at all three), and
+# "Arts and Sciences" no longer reads as the `arts` field. Checked in order; first match wins.
+_UNIT_FIELDS: list[tuple[re.Pattern, list[str]]] = [(re.compile(rx), fields) for rx, fields in (
+    (r"^(?:liberal arts and human sciences|clahs)\b", _HUMANITIES + ["arts", "music", "human development", "education"]),
+    (r"^health and human (?:sciences|services|performance|ecology)\b",
+     ["health sciences", "human development", "nutrition", "kinesiology"]),
+    (r"^(?:natural |physical |life )?sciences?\b(?! and)", _SCIENCES),
+    (r"^(?:liberal )?arts and sciences\b", _SCIENCES + _HUMANITIES + ["arts"]),
+    (r"^engineering(?: and (?:technology|applied science|computing))?\b", ["engineering", "computer science"]),
+)]
+_FIELD_STOP = set("a an the for to by in with who are is all any from at on as that which our their his her its "
+                  "these those must be been have has will being".split())
+# Graduate and professional programs (item 4). Long names match case-insensitively; the short degree letters only in
+# capitals, as whole words, and next to program wording ("MD program", "pursuing a JD", "(MSN/DNP) program"), so
+# "Baltimore, MD 21201" is not a medical degree. "pre-med", "pre-dental", "pre-PA", "pre-law" never count.
+_GRAD_TOKEN = r"(?-i:MD|JD|DVM|DMD|DDS|PharmD|MBA|MSN|DNP)"
+GRADUATE_PROGRAMS = re.compile(
+    r"\bclinical nurse specialists?\b|\bnurse practitioners?\b|\bnurse anesthe\w*|\bdoctor of nursing practice\b"
+    r"|\bphysician assistants?\b|\b(?:school|college) of (?:dental |veterinary |osteopathic )?medicine\b"
+    r"|\b(?:medical|dental|veterinary|law|pharmacy) (?:students?|school)\b|\bschool of (?:law|pharmacy)\b"
+    r"|\bdoctor of (?:pharmacy|medicine|dental medicine|dental surgery|veterinary medicine|jurisprudence)\b"
+    r"|\bjuris doctor\b|\bmaster(?:'s|’s|s)? (?:of|in) (?-i:[A-Z])"
+    rf"|\b{_GRAD_TOKEN}\b(?:\s*[/,]\s*(?-i:[A-Z][A-Za-z.]{{1,7}}))*\)?\s+(?:programs?|degrees?|students?|candidates?|"
+    r"curriculum|class|track)\b"
+    rf"|\b(?:pursuing|earning|seeking|enrolled in|admitted to|accepted (?:in)?to|toward|towards)\s+"
+    rf"(?:an?\s+|the\s+|their\s+)?{_GRAD_TOKEN}\b", re.I)
+_MIT_VT = re.compile(r"\bMIT\b")          # Master of Information Technology, only on Virginia Tech rows
+_PRE_PREFIX = re.compile(r"\bpre-?\s?$", re.I)
+_CAREER_BEFORE = re.compile(r"\b(?:become|becoming|careers?|aspir\w*|goals?|plans? to|planning to|intends? to|"
+                            r"intending to|interest(?:ed)? in|will (?:enter|attend|apply)|apply(?:ing)? to|"
+                            r"prepar\w+ (?:for|to))\b[^.;]*$", re.I)
+# The listing also names undergraduates, so a professional-program mention widens `levels` instead of replacing it.
+_UNDERGRAD_NAMED = re.compile(r"\bundergrad|\bbachelor|\bBSN\b|\bpre-|\bfreshm[ae]n\b|\bsophomores?\b|\bjuniors?\b|"
+                              r"\bseniors?\b|\bhigh school\b|\bcommunity college\b|\bassociate", re.I)
+# Generic graduate wording ("graduate students", "master's", "Ph.D."), whole words: "undergraduate students" and
+# "graduates of" are not graduate level.
+_GRAD_GENERIC = re.compile(r"(?<!under)\bgraduate[- ](?:students?|programs?|degrees?|level|school|studies|study)\b|"
+                           r"\bmaster'?s\b|\bdoctoral\b|\bph\.?\s?d\b", re.I)
+# AcademicWorks fallback (rows with no level wording at all): "graduate" as a level, not "graduates of" / "graduated
+# from" / "will graduate in May".
+_GRAD_WORD = re.compile(r"(?<!under)\bgraduate\b(?!\s+(?:from|in|with|this|next|by|before|after|on|at|high)\b)", re.I)
+# Declared major / admitted to the program (item 8).
+_DECLARED_RX = re.compile(
+    r"\bdeclared (?:a |an |their |the )?major\b|\bhave declared\b|\bmajor (?:must be|is) declared\b"
+    r"|\b(?:admitted|accepted) (?:in)?to (?:the |a |an )?(?:[\w&'’()/-]+ ){0,6}?"
+    r"(?:programs?|majors?|curriculum|college|school|department)\b"
+    r"|\benrolled in (?:the |a |an )?(?:[\w&'’()/-]+ ){0,6}?(?:programs?|majors?|curriculum)\b"
+    r"|\benrolled in the (?:college|school|department) of\b", re.I)
+_DECLARED_NOT = re.compile(r"\bnot (?:yet )?(?:declared|admitted|accepted|enrolled)\b|\bundeclared\b|\bintended major\b|"
+                           r"\b(?:intend(?:s|ing)?|plan(?:s|ning)?) to (?:declare|major|enroll|apply|pursue|study)\b|"
+                           r"\bor (?:intend|plan)\w*|\bpre-", re.I)
+_RISING = re.compile(r"\brising (sophomore|junior|senior)s?\b", re.I)
+_YEAR_BELOW = {"sophomore": "freshman", "junior": "sophomore", "senior": "junior"}
 _PREF = re.compile(r"\bprefer|\bpriority\b|\bconsideration (will be|is) given|\bmay be given\b|\bdesirable\b|\bencouraged\b", re.I)
 _SOFT = re.compile(r"leadership|community service|volunteer|extracurricular|involve(d|ment)|commitment to|"
                    r"interest in|passion|demonstrat\w+ (a |an )?(interest|commitment|leadership|character)|"
@@ -375,6 +448,100 @@ def field_match(wanted: list[str], majors: list[str]) -> str:
     return "fail"
 
 
+# --------------------------------------------------------------------------- majors, units, levels (WP5)
+def unit_fields(name: str) -> set[str]:
+    """Fields a college / school / department name stands for ("Health and Human Sciences" -> health sciences,
+    human development, nutrition, kinesiology; "Dental Medicine" -> dentistry)."""
+    low = squash(name).lower()
+    for rx, fields in _UNIT_FIELDS:
+        if rx.search(low):
+            return set(fields)
+    return field_keys(low)
+
+
+def unit_name(text: str) -> str:
+    """The first "College/School/Department of X" in a text, or ""."""
+    m = _UNIT_RX.search(text or "")
+    return re.sub(r"(?:,? (?:and|&|of))+$", "", m.group(1)) if m else ""
+
+
+def _fields_before_students(text: str) -> set[str]:
+    """"a Child Development and Family Relations student", "nursing students", "Psychology majors"."""
+    out: set[str] = set()
+    for m in re.finditer(r"\b(?:students?|majors?)\b", text, re.I):
+        words = re.findall(r"[\w&'’-]+", text[:m.start()])[-6:]
+        phrase: list[str] = []
+        for w in reversed(words):
+            if w.lower() in _FIELD_STOP:
+                break
+            phrase.insert(0, w)
+        if phrase:
+            out |= field_keys(" ".join(phrase))
+    return out
+
+
+def _sentence_majors(sent: str) -> tuple[set[str], set[str], bool]:
+    """(fields named as the major, fields from a unit name, unit sentence has "major" wording)."""
+    units = list(_UNIT_RX.finditer(sent))
+    rest = sent
+    for u in reversed(units):
+        rest = rest[:u.start()] + " " + rest[u.end():]
+    named = field_keys(rest) if _MAJOR_TRIGGER.search(rest) else set()
+    named |= _fields_before_students(rest)
+    from_unit = set().union(*(unit_fields(u.group(2)) for u in units)) if units else set()
+    if units and not named and not from_unit and _MAJOR_TRIGGER.search(sent):
+        named = field_keys(sent)          # a lower-case unit name the unit pattern does not read
+    return named, from_unit, bool(_MAJOR_WORDS.search(sent))
+
+
+def graduate_program(hard: list[str], school: Optional[str]) -> str:
+    """The first hard sentence naming a graduate or professional program, or ""."""
+    for sent in hard:
+        for m in GRADUATE_PROGRAMS.finditer(sent):
+            head = sent[:m.start()]
+            if _PRE_PREFIX.search(head) or _CAREER_BEFORE.search(head[-60:]):
+                continue                     # "pre-med students", "plan to become a nurse practitioner"
+            return sent
+        if school == "vt" and _MIT_VT.search(sent):
+            return sent
+    return ""
+
+
+def declared_major(hard: list[str]) -> str:
+    """The sentence requiring a declared major / admission to the program, or ""."""
+    for sent in hard:
+        if _DECLARED_NOT.search(sent) or _GROUP_NEGATION.search(sent):
+            continue
+        for m in _DECLARED_RX.finditer(sent):
+            span = sent[m.start():m.end() + 60]
+            if "major" in m.group(0).lower() or field_keys(span) or (unit_name(span) and unit_fields(unit_name(span))):
+                return sent
+    return ""
+
+
+def rising_years(sentence: str) -> set[str]:
+    """Class years a sentence names only as "rising X" ("rising seniors" -> {"senior"})."""
+    low = (sentence or "").lower()
+    rising = {m.group(1) for m in _RISING.finditer(low)}
+    return {yr for yr in rising if not re.search(rf"(?<!rising )\b{yr}s?\b", low)}
+
+
+def locality_has_alternative(sentence: str, locs: list[str]) -> bool:
+    """"Resident of Mecklenburg County or have accessed … programming": after the place, " or " opens another way to
+    qualify that is not a place, so living elsewhere does not rule the student out."""
+    sentence = sentence or ""
+    end = 0
+    for loc in locs:
+        first = re.escape(loc.split()[0])
+        for m in re.finditer(rf"\b{first}\b", sentence):
+            end = max(end, m.end())
+    if not end:
+        return False
+    return bool(re.search(r"\bor (?:(?:who|whose|that) )?(?:have|has|had|are|is|be|been|participat\w*|accessed|access|"
+                          r"an? member|members?|descendants?|child(?:ren)?|employees?|dependents?|spouses?|served|"
+                          r"currently)\b", sentence[end:], re.I))
+
+
 def _num(tok: str) -> Optional[int]:
     tok = tok.lower()
     return int(tok) if tok.isdigit() else _NUMWORD.get(tok)
@@ -441,29 +608,63 @@ def extract(s: Scholarship) -> Criteria:
         c.levels.append("hs_senior")
     if college_grad_senior or re.search(r"undergraduate|sophomore|junior\b|rising (sophomore|junior|senior)|currently enrolled|current(ly)? (college )?student|full[- ]time student", low_hard):
         c.levels.append("undergrad")
-    if re.search(r"graduate student|master'?s|doctoral|ph\.?d|graduate (program|degree|level)|law student|medical student|dvm", low_hard):
+    if _GRAD_GENERIC.search(low_hard):
         c.levels.append("graduate")
+    # Graduate / professional programs: graduate only, unless the listing also names undergraduates.
+    grad_sent = graduate_program(hard, s.school)
+    if grad_sent:
+        ev["levels"] = grad_sent
+        if not _UNDERGRAD_NAMED.search(" ".join(hard)):
+            c.levels = ["graduate"]
+        else:                                    # "BSN and MSN students", "pre-med or medical students"
+            if not {"hs_senior", "undergrad"} & set(c.levels):
+                c.levels.append("undergrad")
+            if "graduate" not in c.levels:
+                c.levels.append("graduate")
+    # "rising seniors" are juniors now: the year below counts (and the named year itself, which the hard filter
+    # turns into an unknown, see hard_filter.check).
+    rising = {m.group(1) for m in _RISING.finditer(low_hard)}
     for yr in ("freshman", "sophomore", "junior", "senior"):
-        if re.search(rf"\b(rising |current )?{yr}s?\b", low_hard) and not (yr == "senior" and "high school senior" in low_hard and "undergrad" not in c.levels):
+        named = re.search(rf"(?<!rising )\b(current )?{yr}s?\b", low_hard) and not (
+            yr == "senior" and "high school senior" in low_hard and "undergrad" not in c.levels)
+        if named or yr in rising or any(_YEAR_BELOW[r] == yr for r in rising):
             c.class_years.append(yr)
+    if c.class_years:
+        ev["class_years"] = next((x for x in hard if re.search(r"\b(?:freshm[ae]n|sophomores?|juniors?|seniors?)\b",
+                                                                x, re.I)), "")
     if s.source.startswith("academicworks_") and not c.levels:
-        c.levels = ["undergrad", "graduate"] if "graduate" in low_hard else []
+        c.levels = ["undergrad", "graduate"] if _GRAD_WORD.search(low_hard) else []
 
-    # --- majors (only in restrictive sentences)
-    for sent in hard + ([s.name] if _MAJOR_TRIGGER.search(s.name) else []):
-        if not _MAJOR_TRIGGER.search(sent):
-            continue
-        for name in sorted(field_keys(sent), key=list(FIELDS).index):
-            if name not in c.majors:
-                c.majors.append(name)
-                ev.setdefault("majors", sent)
-    # "College of Engineering" next to "majoring in Computer Engineering" is context, not a wider restriction.
-    keep = _most_specific(set(c.majors))
-    c.majors = [m for m in c.majors if m in keep]
-    if s.college_or_department and not c.majors:
-        for name in sorted(field_keys(s.college_or_department), key=list(FIELDS).index):
-            c.majors.append(name)
-            ev.setdefault("majors", s.college_or_department)
+    # --- majors (only in restrictive sentences). A field named as the major wins; a College/School/Department name
+    # next to it is context ("College of Engineering" + "majoring in Computer Engineering"). When the unit is the only
+    # source, `majors_from_unit` tells the hard filter not to treat a match as certain.
+    named_f, unit_f, unit_ev, named_ev, unit_major_words = set(), set(), "", "", False
+    for sent in hard:
+        named, from_unit, major_words = _sentence_majors(sent)
+        if named:
+            named_f |= named
+            named_ev = named_ev or sent
+        elif from_unit:
+            unit_f |= from_unit
+            unit_ev = unit_ev or sent
+            unit_major_words = unit_major_words or major_words
+    order = list(FIELDS).index
+    if named_f:
+        c.majors, ev["majors"] = sorted(_most_specific(named_f), key=order), named_ev
+    elif unit_f:
+        c.majors, ev["majors"] = sorted(unit_f, key=order), unit_ev     # a unit's list is kept whole
+        if not unit_major_words:
+            c.majors_from_unit, ev["majors_from_unit"] = True, unit_ev
+    elif s.college_or_department:
+        dept = s.college_or_department
+        found = [m.group(2) for m in _UNIT_RX.finditer(dept)]
+        fields = set().union(*(unit_fields(u) for u in found)) if found else field_keys(dept)
+        if fields:
+            c.majors, ev["majors"] = sorted(fields, key=order), dept
+            c.majors_from_unit, ev["majors_from_unit"] = True, dept
+    declared = declared_major(hard)
+    if declared and c.majors:
+        c.declared_major_required, ev["declared_major_required"] = True, declared
 
     # --- need / demographics / status
     def flag(field: str, rx: str, value=True):

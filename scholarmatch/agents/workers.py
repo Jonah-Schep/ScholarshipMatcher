@@ -118,13 +118,17 @@ def run_extractor(llm: LLM, s: Scholarship, feedback: str = "") -> ExtractedCrit
 
 
 # Criteria fields the Extractor schema does not have yet (WP7 adds them); copied from the rules with their evidence.
-_RULE_ONLY_FIELDS = ("restricted_groups", "destination_schools", "non_resident_required")
+_RULE_ONLY_FIELDS = ("restricted_groups", "destination_schools", "non_resident_required", "majors_from_unit",
+                     "declared_major_required")
 
 
 def to_criteria(x: ExtractedCriteria, rules: Criteria) -> Criteria:
     """LLM fields + things only rules know (application method from the source's structure, and the criteria the
-    Extractor schema does not have yet: `restricted_groups`, `destination_schools`, `non_resident_required`, carried
-    from rules with their evidence until WP7)."""
+    Extractor schema does not have yet: `restricted_groups`, `destination_schools`, `non_resident_required`,
+    `majors_from_unit`, `declared_major_required`, carried from rules with their evidence until WP7).
+
+    `majors_from_unit` / `declared_major_required` only ever soften a Field-of-study `pass` to `unknown`, so applying
+    the rule flags to the Extractor's `majors` can not exclude anyone."""
     evidence = {e.field: e.quote for e in x.evidence}
     for f in _RULE_ONLY_FIELDS:
         if getattr(rules, f) and rules.evidence.get(f):
@@ -138,7 +142,8 @@ def to_criteria(x: ExtractedCriteria, rules: Criteria) -> Criteria:
         military_affiliation_required=x.military_affiliation_required,
         us_citizen_or_resident_required=x.us_citizen_or_resident_required, num_awards=x.num_awards,
         restricted_groups=list(rules.restricted_groups), destination_schools=list(rules.destination_schools),
-        non_resident_required=rules.non_resident_required, application_method=rules.application_method,
+        non_resident_required=rules.non_resident_required, majors_from_unit=rules.majors_from_unit,
+        declared_major_required=rules.declared_major_required, application_method=rules.application_method,
         requirements=Requirements(essay_count=x.essay_count, recommendation_letters=x.recommendation_letters,
                                   transcript=x.transcript, interview=x.interview, fafsa=x.fafsa,
                                   portfolio_or_audition=x.portfolio_or_audition, other=x.other_requirements),

@@ -118,8 +118,8 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 183 collected = 161 pass + 22 strict xfail (the regression corpus; WP5 12, WP6 10).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP4 done.
+  audit). Tests: 194 collected = 184 pass + 10 strict xfail (the regression corpus; all WP6).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP5 done.
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
@@ -143,6 +143,21 @@ Full sequence diagram: `docs/architecture.md`.
   `Criteria.non_resident_required` ("out-of-state students", "non-residents of Virginia") → "Residency" (fail for the
   school's own state, restrictive unknown when "or" offers another way in). `to_criteria` carries both from rules
   (`workers._RULE_ONLY_FIELDS`) until WP7. Check details never repeat the student's county / city / high school.
+  A locality sentence that offers a non-place alternative after the place ("… Counties or have accessed …") gives a
+  restrictive unknown instead of a fail (`extract_rules.locality_has_alternative`, `rules-5`).
+- Graduate programs, units, declared majors (`rules-5`): `extract_rules.GRADUATE_PROGRAMS` (CNS, NP, nurse anesthesia,
+  DNP/MSN, PA, School of (Dental/Veterinary) Medicine, medical/law/pharmacy students or school, PharmD, JD, "Master of
+  X", MBA; short degree letters only in capitals next to program wording; "MIT" only on VT rows; never after "pre-" or
+  career wording such as "plan to become") sets `levels = ["graduate"]`, or adds `graduate` when the listing also names
+  undergraduates. Generic "graduate" wording uses whole words ("undergraduate students", "graduates of" are not graduate
+  level). Majors: a field named as the major wins over a College/School/Department name; a unit alone fills `majors`
+  from `_UNIT_FIELDS` (CLAHS, Health and Human Sciences, College of Science, Arts and Sciences, Engineering) or the unit's
+  keywords and sets `Criteria.majors_from_unit`; then `hard_filter` keeps only a direct field hit as `pass` (a related
+  field → unknown). `Criteria.declared_major_required` ("declared major", "enrolled in the nursing program", "admitted to
+  the College of X") turns a high-school senior's Field-of-study pass into unknown. New fields `human development`,
+  `rehabilitation`, `communication sciences and disorders`; "<Field> student(s)/majors" is a major trigger. "rising X"
+  stores the year below and X; a student whose year is X gets an unknown Class year. Both new flags are carried by
+  `to_criteria` from rules (they only soften a pass, so they are safe on LLM-extracted majors).
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -162,21 +177,18 @@ False positives still dominate the results. Highest impact first:
 2. *(Fixed in WP2: title-only rows are capped at 30% certainty and rows with no stated requirement at 60%, so they
    rank below rows with confirmed requirements; `rubric-3`.)*
 3. *(Fixed in WP4: county lists, cities, school systems and high schools behind restrictive wording → "Locality";
-   destination college → "College attending"; `rules-4`, `rubric-5`. A locality sentence with an "or" alternative
-   still fails a non-local student.)*
-4. **Graduate and professional programs** (Clinical Nurse Specialist, Nurse Practitioner, Physician Assistant,
-   Dental Medicine, MSN/DNP) carry no `graduate` level restriction.
+   destination college → "College attending"; `rules-4`, `rubric-5`. Since WP5 a locality sentence with a non-place
+   "or" alternative gives a restrictive unknown.)*
+4. *(Fixed in WP5: graduate and professional programs set a `graduate` level; `rules-5`.)*
 5. **SC CHE programs:** Free Tuition for Residents Over 60 (needs an age rule), SC WINS and Lottery Tuition
    Assistance (technical/two-year colleges only, so an institution-type rule), SC National Guard CAP (Guard members
    only; since WP3 a restrictive "Specific group" unknown, but no fail when the profile says "not military"), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
    Fellows are wrongly excluded because the STEM/education/accounting "enhancement" text is read as a major restriction.
 6. *(Fixed in WP4: "out-of-state students" / "non-residents of X" → "Residency" check, restrictive unknown when the
    sentence offers another way in, as for O. C. Thompson.)*
-7. **Majors named as a department or college still slip through:** "College of Health and Human Sciences"
-   becomes the broad `health sciences` field, so Child Development, Addictions & Rehab and Family & Consumer
-   Science awards pass for nursing students.
-8. **"Incoming freshman" and "enrolled in nursing" for high-school seniors:** awards requiring a declared
-   College of Nursing major should be a Verify for pre-nursing freshmen, not a pass.
+7. *(Fixed in WP5: new human development / rehabilitation / CSD fields; a college or department name alone sets
+   `majors_from_unit`, so only a direct field hit passes; `rules-5`.)*
+8. *(Fixed in WP5: `declared_major_required` makes a high-school senior's Field-of-study pass a Verify; `rules-5`.)*
 9. *(Fixed in WP1: run header counts AI-reviewed items, progress label, "$0.00" awards. Not yet checked in the running app.)*
 10. **VT scrape:** check that VT rows have `detail_fetched` (round 1 found title-only rows). Re-scrape without `--max-details` if needed.
 11. *(Fixed in WP1: launch config `scholarmatch-mac` uses `.venv/bin/python`.)*

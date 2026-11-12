@@ -11,7 +11,8 @@ import json
 import re
 
 from .. import config, db
-from ..ingest.extract_rules import STATE_NAMES, field_match, non_resident_has_alternative, non_resident_state
+from ..ingest.extract_rules import (STATE_NAMES, field_match, locality_has_alternative, non_resident_has_alternative,
+                                    non_resident_state, rising_years, unit_name)
 from ..models import Criteria, HardCheck, Scholarship, StudentProfile
 from ..textutil import norm
 
@@ -87,14 +88,17 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
         add("Residency", "pass" if ok else "fail", f"Residents of {', '.join(c.residency_states)}; you live in {p.state}.")
 
     if c.localities:
-        out.append(locality_check(c.localities, p))
+        out.append(locality_check(c.localities, p, c.evidence.get("localities", "")))
     if c.destination_schools and not s.school:
         out.append(college_check(c.destination_schools, p))
     if c.non_resident_required:
         out.append(non_resident_check(s, c, p))
 
+    rising = rising_years(c.evidence.get("class_years", ""))
     if c.levels:
-        upper_years_only = bool(c.class_years) and "freshman" not in c.class_years
+        # "rising sophomores" are current college freshmen, so they do not include incoming students either
+        incoming_ok = "freshman" in c.class_years and "sophomore" not in rising
+        upper_years_only = bool(c.class_years) and not incoming_ok
         if p.level in c.levels:
             add("Education level", "pass", f"Open to: {', '.join(c.levels)}.")
         elif p.level == "hs_senior" and upper_years_only:
@@ -109,6 +113,10 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
     if c.class_years and p.level == "undergrad":
         if not p.class_year:
             add("Class year", "unknown", f"For {', '.join(c.class_years)}; add your class year.")
+        elif p.class_year.lower() in rising:
+            yr = p.class_year.lower()
+            add("Class year", "unknown", f"For rising {yr}s (students who will be {yr}s next year); as a {yr} now, "
+                                         f"check whether you still qualify.")
         else:
             add("Class year", "pass" if p.class_year.lower() in c.class_years else "fail",
                 f"For {', '.join(c.class_years)}; you are a {p.class_year}.")
@@ -124,6 +132,14 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
             detail = {"pass": f"For {', '.join(c.majors[:4])}; matches {', '.join(p.majors)}.",
                       "unknown": f"For {', '.join(c.majors[:4])}; check that your major ({', '.join(p.majors)}) qualifies.",
                       "fail": f"For {', '.join(c.majors[:4])}; your major is {', '.join(p.majors)}."}[result]
+            if result == "pass" and c.majors_from_unit and not direct:
+                # the listing names a college or department, not a major: a related field is not proof
+                unit = unit_name(c.evidence.get("majors_from_unit", "")) or "the college or department it names"
+                result, detail = "unknown", f"For students in the {unit}; check that your major is in that college."
+            elif result == "pass" and c.declared_major_required and p.level == "hs_senior":
+                result = "unknown"
+                detail = (f"Requires a declared major in {', '.join(c.majors[:4])}; incoming students may not "
+                          f"qualify yet.")
             add("Field of study", result, detail)
 
     if c.pell_required:
@@ -204,9 +220,11 @@ def _locality_result(loc: str, county: str, city: str, hs: str) -> str:
     return "fail" if (county or city) else "unknown"
 
 
-def locality_check(locs: list[str], p: StudentProfile) -> HardCheck:
+def locality_check(locs: list[str], p: StudentProfile, sentence: str = "") -> HardCheck:
     """"Locality": pass when any listed county / city / school system / high school is the student's; fail when
-    the student's location rules all of them out; unknown when the profile does not say enough."""
+    the student's location rules all of them out; unknown when the profile does not say enough. When the sentence
+    offers another way in after the place ("… Counties or have accessed … programming"), a fail becomes a
+    restrictive unknown, as for the out-of-state rule."""
     shown = ", ".join(locs[:4]) + ("…" if len(locs) > 4 else "")
     county, city, hs = norm(p.county), norm(p.city), norm(p.high_school)
     if not (county or city or hs):
@@ -218,6 +236,10 @@ def locality_check(locs: list[str], p: StudentProfile) -> HardCheck:
     if "unknown" in results:
         return HardCheck(name="Locality", result="unknown",
                          detail=f"Limited to {shown}; add your county and high school to confirm.")
+    if locality_has_alternative(sentence, locs):
+        return HardCheck(name="Locality", result="unknown", weight="restrictive",
+                         detail=f"Mainly for {shown}; your location is not one of these, so you would need to "
+                                f"qualify another way the listing names.")
     return HardCheck(name="Locality", result="fail", detail=f"Limited to {shown}; your location is not one of these.")
 
 
