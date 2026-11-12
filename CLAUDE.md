@@ -18,16 +18,25 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
   - Sources: `vt`, `usc`, `ecu` (AcademicWorks), `sc_che`, `gsites`, `manual`. USC is large: use
     `--max-pages N` and re-run (pages cache under `data/http_cache/`; `--no-cache` to refetch).
+  - AcademicWorks only: `--max-details N` caps detail pages per school (rows beyond the cap stay title-only);
+    `--include-ended` also fetches detail pages of ended awards.
   - Output: `data/scholarmatch.db`, `data/export/<source>.jsonl`, `data/export/combined.csv`.
+- No linter, formatter or build step is configured.
+- `data/` and `.env` are gitignored: a fresh clone has no catalog until `load_sample.py` or a scrape is run.
 - Config comes from `.env` (python-dotenv): `ANTHROPIC_API_KEY`, `SM_MODEL_<ROLE>`, `SM_LLM_PROVIDER=openai_compat`
-  + `SM_OPENAI_*`, `SM_DB_PATH`, `SM_MAX_LLM_CANDIDATES` (30), `SM_MAX_RESULTS` (15). See `scholarmatch/config.py`.
+  + `SM_OPENAI_*`, `SM_DB_PATH`, `SM_DATA_DIR`, `SM_MAX_LLM_CANDIDATES` (30), `SM_MAX_RESULTS` (15),
+  `SM_LLM_WORKERS` (6, parallel scholarships per run). See `scholarmatch/config.py`.
+  Provider choice (`config.llm_provider`): explicit `SM_LLM_PROVIDER` wins, then an Anthropic key, then
+  `SM_OPENAI_BASE_URL`, else offline. So with both keys in `.env`, Anthropic is used unless the provider is set.
   The README mentions a `.env.example`, but no such file exists.
 
 ## Pipeline (big picture)
 Ingest: scraper → `ingest/scam.py` (scam screen) + `ingest/extract_rules.py` (regex criteria) →
 `db.upsert_scholarships` (keyed by content hash).
 Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
-1. `fingerprint` (profile, catalog version, date, all version constants) → if a stored `MatchRun` matches, it is returned unchanged.
+1. `fingerprint` (profile, catalog version, date, all version constants, provider, per-role models, candidate cap) → if a stored `MatchRun` matches, it is
+   returned unchanged (`force=True` skips this). Agent responses are also cached in the DB by prompt, so a
+   forced re-run with unchanged prompts makes no new LLM calls.
 2. SQL filter (scam, deadline, state/school, loans, GPA) → `hard_filter.check` pass/fail/unknown → pre-rank → cap at `SM_MAX_LLM_CANDIDATES`.
 3. For each shortlisted scholarship (in parallel across scholarships): Extractor (criteria + quotes, grounded) → rule re-check →
    Filter (keep/drop/uncertain; a drop must quote the listing) → Scorer (fit category + evidence) → Verifier
