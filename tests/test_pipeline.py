@@ -100,13 +100,29 @@ def test_ungrounded_drop_fails_open(catalog, profile):
 
 
 def test_no_pii_reaches_agents(catalog, profile):
-    llm = FakeLLM()
+    llm = FakeLLM(ungrounded_drop=True)                                  # keeps test:4h in the results
+    profile = profile.model_copy(update={"affiliations": ["Parent works at Zyxwv Holdings", "member of 4-H club"]})
     run = Supervisor(llm).run(profile, AS_OF)
+    assert next(h for h in get(run, "test:4h").hard_checks if h.name == "Specific group").result == "pass"
     ChatAgent(llm, profile, run).ask("test:svc", "What should I do first?")
+    ChatAgent(llm, profile, run).ask("test:4h", "Am I eligible?")      # the chat sees its "Specific group" check
     blob = "\n".join(llm.prompts)
-    for secret in ("Jordan", "Testcase", "Montgomery", "Blacksburg", "Hispanic", '"gender":', '"ethnicities"'):
+    for secret in ("Jordan", "Testcase", "Montgomery", "Blacksburg", "Hispanic", '"gender":', '"ethnicities"',
+                   "Zyxwv", "Parent works at", '"affiliations"', "no_special_affiliations"):
         assert secret not in blob, secret
     assert "Robotics team captain" in blob
+    assert "affiliations" not in profile.redacted_view() and "no_special_affiliations" not in profile.redacted_view()
+
+
+def test_group_limited_award_kept_with_verify_unless_student_says_none_apply(catalog, profile):
+    run = Supervisor(OfflineLLM()).run(profile, AS_OF)
+    r = get(run, "test:4h")                                              # no affiliations listed: kept, flagged
+    assert any(f.startswith("Verify — Specific group") for f in r.flags)
+    assert next(h for h in r.hard_checks if h.name == "Specific group").weight == "restrictive"
+    member = Supervisor(OfflineLLM()).run(profile.model_copy(update={"affiliations": ["4-H club member"]}), AS_OF)
+    assert next(h for h in get(member, "test:4h").hard_checks if h.name == "Specific group").result == "pass"
+    none = Supervisor(OfflineLLM()).run(profile.model_copy(update={"no_special_affiliations": True}), AS_OF)
+    assert "Specific group" in excl(none)["test:4h"].reason and "test:svc" in keys(none)
 
 
 def test_sorting_and_saved(catalog, profile):

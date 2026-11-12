@@ -267,3 +267,124 @@ def test_title_only_row_ranks_below_confirmed_requirements():
     assert r_real.match_score > r_title.match_score and r_real.win_probability > r_title.win_probability
     for order in ("Best overall match", "Highest chance of winning"):
         assert rubric.sort_results([r_title, r_real], order)[0].scholarship_key == r_real.scholarship_key
+
+
+# ----------------------------------------------------------------------------- WP3: specific groups
+def _groups(text):
+    return extract_rules.extract(sch("g", "Example Scholarship", text)).restricted_groups
+
+
+def test_group_patterns_positive():
+    cases = {   # at least one per pattern family in docs/fix_plan.md (WP3)
+        "For children of employees of McGuireWoods LLP.": "children of employees of McGuireWoods LLP",
+        "For sons and daughters of Acme Corp employees.": "sons and daughters of Acme Corp employees",
+        "For children of tobacco growers in Southside Virginia.": "children of tobacco growers in Southside Virginia",
+        "For documented descendants of Martin Luther and Clara B. Vaughan.":
+            "documented descendants of Martin Luther and Clara B. Vaughan",
+        "Must be a member of Phi Theta Kappa.": "member of Phi Theta Kappa",
+        "Applicants must be active USATT members and must join the table tennis team.": "active USATT members",
+        "Open to members in good standing of the Elks Lodge.": "members in good standing of the Elks Lodge",
+        "For students receiving a Virginia tribal scholarship.": "receiving a Virginia tribal scholarship",
+        "Open to recipients of the Gates Millennium Scholarship.": "recipients of the Gates Millennium Scholarship",
+        "For seniors who have completed a co-op.": "completed a co-op",
+        "For students registered with Services for Students with Disabilities.":
+            "registered with Services for Students with Disabilities",
+        "For students transferring from the Virginia Community College System (VCCS) who have earned an associate "
+        "degree.": "transferring from the Virginia Community College System (VCCS)",
+        "For students with diabetes or an autoimmune disease.": "students with diabetes or an autoimmune disease",
+    }
+    for text, phrase in cases.items():
+        assert phrase in _groups(text), (text, _groups(text))
+    assert _groups("For students who have earned an associate degree from any accredited school.") == [
+        "earned an associate degree from any accredited school"]
+
+
+def test_group_patterns_negative():
+    for text in ("Preference given to children of employees of Acme Corp.",        # preference stays soft
+                 "Priority will be given to members of the Elks Lodge.",
+                 "Applicants should be active members of the community.",
+                 "Open to any member of the graduating class.",
+                 "Recipients of this scholarship will be notified in May.",
+                 "Recipients of the scholarship will be announced in April.",
+                 "Students receiving a scholarship must keep a 3.0 GPA.",
+                 "Open to students with a disability.",
+                 "Open to transfer students.",
+                 "Transfer students from any college may apply.",
+                 "Children of employees of the foundation are not eligible.",
+                 "Must be enrolled in the College of Engineering.",
+                 "Students majoring in Child Development are eligible."):
+        assert _groups(text) == [], (text, _groups(text))
+    s = sch("g", "Example Scholarship", "Preference given to children of employees of Acme Corp.")
+    c = extract_rules.extract(s)
+    assert c.restricted_groups == [] and any("children of employees" in x for x in c.soft_criteria)
+    # "Recipients of the <this award> Scholarship must ..." is a renewal rule, not a group limit
+    own = sch("g", "Smith Family Scholarship", "Each year, recipients of the Smith Family Scholarship must reapply.")
+    assert extract_rules.extract(own).restricted_groups == []
+    # "students with a disability" stays its own field
+    dis = extract_rules.extract(sch("g", "Example Scholarship", "Open to students with a documented disability."))
+    assert dis.disability_required and dis.restricted_groups == []
+
+
+def test_group_evidence_is_grounded():
+    s = sch("g", "Example Scholarship", "For dependents of Smithfield Foods employees. Minimum GPA of 3.0.")
+    c = extract_rules.extract(s)
+    assert c.restricted_groups == ["dependents of Smithfield Foods employees"]
+    assert is_grounded(c.evidence["restricted_groups"], s.full_text())
+
+
+def test_specific_group_check():
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    s = sch("g", "McGuireWoods LLP Scholarship", "For children of employees of McGuireWoods LLP.")
+    c = extract_rules.extract(s)
+
+    def grp(sch_=s, c_=c, **kw):
+        return next(h for h in hard_filter.check(sch_, c_, StudentProfile(profile_id="x", **kw))
+                    if h.name == "Specific group")
+
+    silent = grp()
+    assert silent.result == "unknown" and silent.weight == "restrictive"
+    assert "Add this under Affiliations" in silent.detail
+    hit = grp(affiliations=["Mom is a paralegal at McGuireWoods"])
+    assert hit.result == "pass" and "paralegal" not in hit.detail      # never echo the affiliation text
+    assert grp(affiliations=["USATT member"]).result == "unknown"       # no overlap, box not ticked
+    assert grp(no_special_affiliations=True).result == "fail"
+    assert grp(affiliations=["USATT member"], no_special_affiliations=True).result == "fail"
+    assert grp(affiliations=["McGuireWoods"], no_special_affiliations=True).result == "pass"
+    # generic words and state names are not an overlap
+    leaf = sch("l", "Universal Leaf Scholarship", "For children of tobacco growers in Southside Virginia.")
+    lc = extract_rules.extract(leaf)
+    assert grp(leaf, lc, affiliations=["Parent is a Virginia Tech employee"]).result == "unknown"
+    assert grp(leaf, lc, affiliations=["family tobacco farm"]).result == "pass"
+
+
+def test_group_limited_award_ranks_below_and_narrows():
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    group = sch("g", "Smithfield Foundation Scholarship", "For dependents of Smithfield Foods employees. Minimum GPA of 3.0.")
+    open_ = sch("o", "Open Merit Scholarship", "Open to all students with a minimum GPA of 3.0.")
+    student = StudentProfile(profile_id="x", gpa=3.5)
+    rs = []
+    for x in (group, open_):
+        c = extract_rules.extract(x)
+        rs.append(rubric.build_result(x, c, student, hard_filter.check(x, c, student), j, "heuristic"))
+    assert "limited to a specific group" in rubric.narrowing(extract_rules.extract(group))
+    assert any(f.startswith("Verify — Specific group") for f in rs[0].flags)
+    assert rs[1].match_score > rs[0].match_score and rs[1].win_probability > rs[0].win_probability
+
+
+def test_to_criteria_carries_restricted_groups_from_rules():
+    from scholarmatch.agents.workers import to_criteria
+    from scholarmatch.models import ExtractedCriteria
+    rules = extract_rules.extract(sch("g", "Example Scholarship", "For children of employees of Acme Corp."))
+    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
+                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
+                          first_generation_required=None, military_affiliation_required=None,
+                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
+                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
+                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
+                          evidence=[])
+    c = to_criteria(x, rules)
+    assert c.restricted_groups == ["children of employees of Acme Corp"]
+    assert c.evidence["restricted_groups"] == rules.evidence["restricted_groups"]

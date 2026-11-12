@@ -123,6 +123,15 @@ def page_profile(pid: str) -> None:
             disability = c2.selectbox("Documented disability?", list(YES_NO), index=yn_index(p.disability))
             military = c3.selectbox("Military / veteran family?", list(YES_NO), index=yn_index(p.military_affiliation))
             citizen = c4.selectbox("U.S. citizen / permanent resident?", list(YES_NO), index=yn_index(p.us_citizen_or_resident))
+            st.markdown("**Affiliations**")
+            st.caption("Some awards are only for a specific group: children of a company's employees, descendants "
+                       "of a named family, members of a club, transfer students, holders of another scholarship. "
+                       "List any that fit you (for example \"parent works at Smithfield Foods\", \"USATT member\", "
+                       "\"transferring from a community college\"). Until you add these or tick the box, such awards "
+                       "stay in your list with a Verify note and a lower estimated chance.")
+            affiliations = st.text_area("Affiliations — one per line", "\n".join(p.affiliations), height=90)
+            no_special = st.checkbox("None of these apply to me (hide awards limited to a specific group)",
+                                     p.no_special_affiliations)
 
         st.subheader("Past essays")
         st.caption("Upload essays you've already written (.txt or .pdf). The app keeps the text locally and only "
@@ -151,7 +160,8 @@ def page_profile(pid: str) -> None:
             financial_need=YES_NO[need], min_award=float(min_award), no_essay_only=no_essay,
             activities=lines(activities), interests=lines(interests), awards_won=lines(awards),
             gender=gender, ethnicities=eth, first_generation=YES_NO[first_gen], disability=YES_NO[disability],
-            military_affiliation=YES_NO[military], us_citizen_or_resident=YES_NO[citizen], essays=essays))
+            military_affiliation=YES_NO[military], us_citizen_or_resident=YES_NO[citizen],
+            affiliations=lines(affiliations), no_special_affiliations=no_special, essays=essays))
         st.session_state["pending_profile"] = pid
         st.session_state["goto"] = "Matches"
         st.rerun()

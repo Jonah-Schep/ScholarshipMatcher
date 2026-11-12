@@ -26,9 +26,9 @@ SCHOOLS = {  # AcademicWorks portals we scrape -> display name, state
 }
 
 # --- Versions: bump when prompts / rules change so caches invalidate cleanly ---
-RULES_VERSION = "rules-2"
+RULES_VERSION = "rules-3"
 PROMPT_VERSION = "p1"
-RUBRIC_VERSION = "rubric-3"
+RUBRIC_VERSION = "rubric-4"
 
 # --- Pipeline knobs (all deterministic) --------------------------------------
 MAX_LLM_CANDIDATES = int(os.environ.get("SM_MAX_LLM_CANDIDATES", 30))  # cost cap per run

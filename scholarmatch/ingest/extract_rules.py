@@ -85,6 +85,80 @@ _PREF = re.compile(r"\bprefer|\bpriority\b|\bconsideration (will be|is) given|\b
 _SOFT = re.compile(r"leadership|community service|volunteer|extracurricular|involve(d|ment)|commitment to|"
                    r"interest in|passion|demonstrat\w+ (a |an )?(interest|commitment|leadership|character)|"
                    r"participat\w+|character|work ethic|career goal|aspir", re.I)
+# --- awards limited to a specific group (WP3). Only hard sentences are searched, so "preference given to children
+# of employees" stays soft. `(?-i:[A-Z])` requires a capitalised proper name even though the patterns run with re.I,
+# which keeps "members of the community" / "transfer students from any college" out.
+_GROUP_FAMILY = r"(?:child(?:ren)?|sons? (?:and|or) daughters?|dependents?|spouses?)"
+GROUP_PATTERNS: dict[str, str] = {
+    "family": rf"\b{_GROUP_FAMILY}(?: (?:and|or) {_GROUP_FAMILY})? of [^.;]{{0,60}}?"
+              r"\b(?:employees?|staff|faculty|associates|members|growers|farmers)\b",
+    "descendants": r"\b(?:direct |lineal |documented )?descendants? of\b",
+    "membership": r"\b(?:an? |active |current )?members? of (?:an? |the )?"
+                  r"(?!(?:community|graduating|class|public|student body|team|household|family)\b)(?-i:[A-Z0-9])"
+                  r"|\bmembers? in good standing\b"
+                  r"|\b(?:active |current )?(?:USATT|4-H|FFA)\b[^.;]{0,40}\b(?:members?|membership|club)\b"
+                  r"|\b(?:members?|membership)\b[^.;]{0,30}\b(?:USATT|4-H|FFA|Boy Scouts|Girl Scouts)\b",
+    "award holders": r"\brecipients? of (?:a|an|the) (?!scholarship\b)[^.;]{1,60}?\bscholarship\b"
+                     r"|\breceiving an? (?!scholarship\b)[^.;]{1,40}?\bscholarship\b"
+                     r"|\bcompleted (?:a|an|the) [^.;]{0,60}?\b(?:co-?op|internship)\b(?: program\b)?"
+                     r"|\bregistered with (?:the )?Services for Students with Disabilities\b",
+    "transfer": r"\btransfer(?:ring)? (?:students? )?from (?:a |the )?(?:community college|VCCS|(?-i:[A-Z]))"
+                r"|\b(?:earned|completed) an associate(?:'s|’s)? degree\b",
+    "medical condition": r"\b(?:students?|applicants?) (?:with|diagnosed with|living with) "
+                         r"(?:diabetes|[^.;]{0,30}?\b(?:disease|disorder|condition)s?\b)",
+}
+_GROUP_RX = {k: re.compile(v, re.I) for k, v in GROUP_PATTERNS.items()}
+_GROUP_NEGATION = re.compile(r"\b(?:not eligible|ineligible|may not apply|cannot apply|are excluded|is excluded)\b", re.I)
+# The group phrase runs from the match to the end of the clause; later clauses ("and must join the team") are cut.
+_GROUP_CLAUSE_END = re.compile(r"[,;:]| who | by | and (?:must|be|have|are|is|will|demonstrate)\b| in order to | to be\b",
+                               re.I)
+_MAX_GROUP_PHRASE = 90
+_ENDS_WITH_INITIAL = re.compile(r"(?:^|\s)(?-i:[A-Z])\.$")
+
+
+def _group_phrase(sent: str, start: int, end: int) -> str:
+    tail = sent[start:]
+    cut = _GROUP_CLAUSE_END.search(tail, end - start)
+    phrase = tail[:cut.start()] if cut else tail
+    if len(phrase) > _MAX_GROUP_PHRASE:
+        phrase = phrase[:_MAX_GROUP_PHRASE].rsplit(" ", 1)[0]
+    phrase = re.sub(r"^(?:an?|the) ", "", phrase.strip(" .!?\"'"), flags=re.I)
+    return phrase
+
+
+def _join_initials(sents: list[str]) -> list[str]:
+    """`sentences` splits "Clara B. Vaughan" after the initial; put such names back together."""
+    out: list[str] = []
+    for sent in sents:
+        if out and _ENDS_WITH_INITIAL.search(out[-1]):
+            out[-1] = f"{out[-1]} {sent}"
+        else:
+            out.append(sent)
+    return out
+
+
+def restricted_groups(hard: list[str], name: str = "") -> tuple[list[str], str]:
+    """Group phrases found in hard (non-preference) sentences, plus the first evidence sentence.
+
+    A sentence that says the group is NOT eligible is skipped, and so is "recipients of the <this award's own name>"
+    (a renewal rule, not a group limit)."""
+    own = {w for w in re.findall(r"[a-z]{4,}", name.lower()) if w != "scholarship"}
+    groups, evidence = [], ""
+    for sent in _join_initials(hard):
+        if _GROUP_NEGATION.search(sent):
+            continue
+        for kind, rx in _GROUP_RX.items():
+            for m in rx.finditer(sent):
+                if kind == "award holders" and m.group(0).lower().startswith("recipient"):
+                    if m.start() == 0 or (own and own <= set(re.findall(r"[a-z]{4,}", m.group(0).lower()))):
+                        continue        # "Recipients of the X Scholarship will/must …" describes this award
+                phrase = _group_phrase(sent, m.start(), m.end())
+                if phrase and not any(phrase.lower() in g.lower() or g.lower() in phrase.lower() for g in groups):
+                    groups.append(phrase)
+                    evidence = evidence or sent
+    return groups, evidence
+
+
 _NUMWORD = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
             "nine": 9, "ten": 10, "a": 1, "an": 1}
 _ESSAY_Q = re.compile(r"essay|describe|explain|why |how (will|would|has|have|do|did)|tell us|discuss|statement|share ", re.I)
@@ -247,6 +321,9 @@ def extract(s: Scholarship) -> Criteria:
     flag("first_generation_required", r"first[- ]generation")
     flag("military_affiliation_required", r"\bveterans?\b|military (service|dependent|famil)|active[- ]duty|corps of cadets|\brotc\b|national guard|(child|children|dependent|spouse)s? of (a )?(veteran|service ?member)")
     flag("us_citizen_or_resident_required", r"u\.?s\.? citizen|united states citizen|permanent resident|citizenship")
+    c.restricted_groups, group_ev = restricted_groups(hard, s.name)
+    if c.restricted_groups:
+        ev["restricted_groups"] = group_ev
 
     # --- number of awards
     m, sent = first(r"\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:\$[\d,]+\s+)?(?:scholarships?|awards?|recipients?|students?|winners?)\s+(?:will be|are|is|shall be)\s+(?:awarded|selected|chosen|given)")

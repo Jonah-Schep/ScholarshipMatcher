@@ -95,6 +95,7 @@ Full sequence diagram: `docs/architecture.md`.
 | Change | File |
 |---|---|
 | Add/alter a profile field | `models.StudentProfile` (+ `redacted_view` decision), `app.page_profile`, `hard_filter.check` |
+| Group-limited awards ("children of employees of X", members, transfers) | `extract_rules.GROUP_PATTERNS`, `hard_filter.group_check` |
 | New eligibility rule | `ingest/extract_rules.py` (regex), `models.Criteria`/`ExtractedCriteria`, `hard_filter.check`, extractor prompt |
 | Scoring weights, chance model, sort orders | `matching/rubric.py` |
 | Prompts and agent contracts | `agents/workers.py`, `models.py` |
@@ -116,8 +117,8 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 169 collected = 127 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0, WP1 and WP2 done.
+  audit). Tests: 176 collected = 148 pass + 28 strict xfail (the regression corpus; WP4 6, WP5 12, WP6 10).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP3 done.
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
@@ -126,6 +127,12 @@ Full sequence diagram: `docs/architecture.md`.
   capped at 30%), `thin` (no hard criterion in `rubric.HARD_CRITERIA_FIELDS` → capped at 60%) or `ok` (the ratio).
   `Enrollment` is not counted. `HardCheck.weight="restrictive"` unknowns count 0 and multiply the chance by 0.25.
   New hard `Criteria` fields go in `HARD_CRITERIA_FIELDS` (the WP3–WP6 names are already listed).
+- Specific groups (`rules-3`, `rubric-4`): `extract_rules.GROUP_PATTERNS` fills `Criteria.restricted_groups` (family of
+  employees/growers/members, descendants, members of a named body or USATT/4-H/FFA, holders of another scholarship or a
+  co-op, SSD registration, transfers, a medical condition) from hard sentences only. `hard_filter.group_check` →
+  "Specific group": pass on a distinctive-word overlap with `StudentProfile.affiliations`, fail only when
+  `no_special_affiliations` is ticked, else a restrictive unknown (decision D1). Both profile fields stay local; the
+  check detail never repeats the affiliation text. `workers.to_criteria` carries `restricted_groups` from rules until WP7.
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -139,11 +146,9 @@ Full sequence diagram: `docs/architecture.md`.
 **The plan for these is `docs/fix_plan.md`** (work packages WP0–WP8, one per session, with a status table).
 Pick up the first `todo` package there; do not start an item below without it.
 False positives still dominate the results. Highest impact first:
-1. **Awards limited to a specific group are not extracted:** children/dependents of employees of X, descendants of
-   a named person, children of tobacco growers, holders of a VA tribal scholarship, VT faculty/staff
-   dependents, club/association members (USATT), community-college transfers. These pass with "Eligibility
-   certainty 100%" and make up most of the VT list. They need a rule (likely fail, or at least unknown + Verify)
-   in `extract_rules.py` and `hard_filter.check`.
+1. *(Fixed in WP3: group-limited awards get a restrictive "Specific group" unknown (Verify flag, 0 certainty, chance
+   x0.25) and fail only when the student ticks "None of these apply to me"; `rules-3`, `rubric-4`. The Profile form
+   fields were not checked in the running app.)*
 2. *(Fixed in WP2: title-only rows are capped at 30% certainty and rows with no stated requirement at 60%, so they
    rank below rows with confirmed requirements; `rubric-3`.)*
 3. **Locality and school limits are missed:** "students from Northampton or Accomack counties", "graduated
@@ -153,7 +158,7 @@ False positives still dominate the results. Highest impact first:
    Dental Medicine, MSN/DNP) carry no `graduate` level restriction.
 5. **SC CHE programs:** Free Tuition for Residents Over 60 (needs an age rule), SC WINS and Lottery Tuition
    Assistance (technical/two-year colleges only, so an institution-type rule), SC National Guard CAP (Guard members
-   only; currently just `Military=unknown`), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
+   only; since WP3 a restrictive "Specific group" unknown, but no fail when the profile says "not military"), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
    Fellows are wrongly excluded because the STEM/education/accounting "enhancement" text is read as a major restriction.
 6. **"Out-of-state students"** is not a residency rule (O. C. Thompson).
 7. **Majors named as a department or college still slip through:** "College of Health and Human Sciences"

@@ -8,9 +8,10 @@ Stage 2 (Python): every structured criterion -> pass / fail / unknown.
 from __future__ import annotations
 
 import json
+import re
 
 from .. import config, db
-from ..ingest.extract_rules import field_match
+from ..ingest.extract_rules import STATE_NAMES, field_match
 from ..models import Criteria, HardCheck, Scholarship, StudentProfile
 from ..textutil import norm
 
@@ -154,7 +155,43 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
             ("us_citizen_or_resident_required", "us_citizen_or_resident", "Citizenship", "U.S. citizen or permanent resident.")):
         if getattr(c, field):
             add(name, _tri(True, getattr(p, attr)), label)
+    if c.restricted_groups:
+        out.append(group_check(c.restricted_groups, p))
     return out
+
+
+# Words that say what KIND of group it is, not WHICH one: they never count as an overlap on their own
+# (so "my mom is a Virginia Tech employee" does not match "children of tobacco growers in Southside Virginia").
+_GROUP_STOP = set(
+    "the and for with from that this who have has are was were its into than our your their his her a an of or in on "
+    "at to by as is be "
+    "child children son sons daughter daughters dependent dependents spouse spouses parent parents family relative "
+    "employee employees employed staff faculty associate associates member members membership active current "
+    "good standing descendant descendants direct lineal documented student students applicant applicants recipient "
+    "recipients receiving received scholarship scholarships award awards program programs completed earned degree "
+    "transfer transferring college colleges community university school system club registered services diagnosed "
+    "living disease disorder condition conditions company inc llc llp corp corporation foundation".split()) | {
+    n for name in STATE_NAMES for n in name.split()}
+
+
+def _group_tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9][a-z0-9'-]*[a-z0-9]", norm(text)) if w not in _GROUP_STOP}
+
+
+def group_check(groups: list[str], p: StudentProfile) -> HardCheck:
+    """"Specific group": pass when an affiliation shares a distinctive word with a group phrase; fail only when the
+    student ticked "none of these apply to me"; otherwise a restrictive unknown (decision D1 in docs/fix_plan.md).
+    The detail never repeats the student's affiliation text (it reaches the chat agent)."""
+    shown = "; ".join(groups[:2])
+    mine = set().union(*(_group_tokens(a) for a in p.affiliations)) if p.affiliations else set()
+    if any(_group_tokens(g) & mine for g in groups):
+        return HardCheck(name="Specific group", result="pass",
+                         detail=f"Only for a specific group: “{shown}”. This matches something you listed under Affiliations.")
+    if p.no_special_affiliations:
+        return HardCheck(name="Specific group", result="fail",
+                         detail=f"Only for a specific group: “{shown}”. You said no special group applies to you.")
+    return HardCheck(name="Specific group", result="unknown", weight="restrictive",
+                     detail=f"Only for a specific group: “{shown}”. Add this under Affiliations if it applies to you.")
 
 
 def failures(checks: list[HardCheck]) -> list[str]:

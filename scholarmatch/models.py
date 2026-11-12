@@ -83,6 +83,9 @@ class Criteria(BaseModel):
     first_generation_required: Optional[bool] = None
     military_affiliation_required: Optional[bool] = None
     us_citizen_or_resident_required: Optional[bool] = None
+    # Awards limited to a specific group (children of employees of X, descendants of Y, members of Z, holders of
+    # another award, transfer students, a medical condition). Short phrases copied from the listing.
+    restricted_groups: list[str] = Field(default_factory=list)
     num_awards: Optional[int] = None
     application_method: Literal["direct", "general_application", "automatic", "unknown"] = "unknown"
     requirements: Requirements = Field(default_factory=Requirements)
@@ -123,6 +126,10 @@ class StudentProfile(BaseModel):
     disability: Optional[bool] = None
     first_generation: Optional[bool] = None
     military_affiliation: Optional[bool] = None
+    # Specific-group ties (parents' employers, clubs, family ties, transfer status, other awards held). Local only:
+    # matched in hard_filter against Criteria.restricted_groups, never sent to an LLM (not in redacted_view).
+    affiliations: list[str] = Field(default_factory=list)
+    no_special_affiliations: bool = False    # "None of these apply to me": group-limited awards then fail
     # soft facts (sent to agents, after redaction)
     activities: list[str] = Field(default_factory=list)
     interests: list[str] = Field(default_factory=list)

@@ -24,20 +24,7 @@ SEVERITY = {"pass": 0, "unknown": 1, "fail": 2}
 
 # (scholarship name, profile_id) -> work package that should fix it. Delete entries as they are fixed.
 XFAIL: dict[str, list[tuple[str, str]]] = {
-    "WP3": [  # awards limited to a specific group -> "Specific group" unknown (restrictive) for a silent profile
-        ("Buzz's Bunch Scholarship", "r1p2"),
-        ("Faculty-Staff Dependent and Spouse Scholarship", "aisha"),
-        ("Martin Luther and Clara B. Vaughan Scholarship", "r1p2"),
-        ("Martin Luther and Clara B. Vaughan Scholarship", "aisha"),
-        ("The Virginia Tech Tribal Match Scholarship", "r1p2"),
-        ("The Virginia Tech Tribal Match Scholarship", "aisha"),
-        ("Graham Stedman Neal Diabetes Fund", "aisha"),
-        ("Universal Leaf Tobacco Company Scholarship", "aisha"),
-        ("McGuireWoods LLP Scholarship", "aisha"),
-        ("Smithfield Foundation Scholarship", "aisha"),
-        ("VCCS Transfer Achievement Scholarship", "aisha"),
-        ("Mossberg Table Tennis Scholarship (Freshman)", "aisha"),
-    ],
+    # WP3 (awards limited to a specific group): all 12 fixed in rules-3.
     "WP4": [  # county lists, school systems, high schools, destination college, out-of-state
         ("Herman C. and Carrie Watson Scholarship", "r1p2"),
         ("Herman C. and Carrie Watson Scholarship", "aisha"),
@@ -65,8 +52,7 @@ XFAIL: dict[str, list[tuple[str, str]]] = {
         ("Free Tuition for Residents Over 60", "derek"),
         ("South Carolina Workforce & Industry Needs Scholarship (SC•WINS)", "r1p3"),
         ("South Carolina Workforce & Industry Needs Scholarship (SC•WINS)", "derek"),
-        ("South Carolina National Guard College Assistance Program (SCNG CAP)", "r1p3"),
-        ("South Carolina National Guard College Assistance Program (SCNG CAP)", "derek"),
+        # SCNG CAP r1p3 / derek ("Specific group" unknown) fixed by WP3's membership pattern; WP6 adds the fail path.
         ("South Carolina HOPE Scholarship (Freshmen)", "r1p3"),
         ("South Carolina Need-based Grant", "r1p3"),
         ("LIFE Scholarship", "r1p3"),

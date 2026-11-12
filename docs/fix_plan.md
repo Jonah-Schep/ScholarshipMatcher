@@ -13,7 +13,7 @@ ends in one branch and one pull request.
 | WP0 Regression corpus + eval script | groundwork | none | done (2026-11-12) | `fix/still-to-fix` | 42 strict xfails (WP3 12, WP4 6, WP5 12, WP6 12); see "WP0 notes" |
 | WP1 UI and launch config | 9, 11 | none | done (2026-11-12) | `fix/still-to-fix` | `rubric-2` (zero-amount flag); header not checked in the running app; see "WP1 notes" |
 | WP2 Certainty when information is missing | 2 | WP0 | done (2026-11-12) | `fix/still-to-fix` | `rubric-3`; `HardCheck.weight` + x0.25 chance factor ready for WP3; see "WP2 notes" |
-| WP3 Awards limited to a specific group | 1 | WP0, WP2 | todo | | |
+| WP3 Awards limited to a specific group | 1 | WP0, WP2 | done (2026-11-12) | `fix/still-to-fix` | `rules-3`, `rubric-4`; all 12 WP3 xfails fixed, plus 2 SCNG CAP (WP6) ones; Profile form not checked in the running app; see "WP3 notes" |
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | todo | | |
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | todo | | |
 | WP6 SC CHE programs | 5 | WP5 | todo | | |
@@ -339,6 +339,74 @@ Files: `models.py`, `ingest/extract_rules.py`, `matching/hard_filter.py`, `match
 Tests: one positive and one negative per pattern family; the regression cases for McGuireWoods, Smithfield,
 Universal Leaf, Vaughan, Tribal Match, Faculty-Staff Dependent, VCCS Transfer, Mossberg (USATT), Buzz's Bunch,
 Graham Stedman Neal; `test_unknown_never_excludes` still passes; PII test extended.
+
+### WP3 notes (2026-11-12)
+
+- **Code.** `models.Criteria.restricted_groups`; `models.StudentProfile.affiliations` / `no_special_affiliations` (not in
+  `redacted_view()`). `extract_rules.GROUP_PATTERNS` (six families, as in the plan) + `restricted_groups(hard, name)`,
+  called from `extract`; evidence in `evidence["restricted_groups"]`. `hard_filter.group_check` → check "Specific
+  group". `rubric.narrowing` adds "limited to a specific group". `workers.to_criteria` copies `restricted_groups` and
+  its evidence from `rules` (not in `_HARD_FIELDS`, no prompt change). `app.page_profile`: an "Affiliations" text area
+  (one per line) and a "None of these apply to me" checkbox inside the optional-details expander, with a short
+  explanation. `RULES_VERSION = "rules-3"`; `RUBRIC_VERSION = "rubric-4"` (the narrowing entry changes Competition
+  points and the chance for group-limited rows).
+- **Patterns as built (deviations from the plan text).** All run only on hard (non-preference) sentences.
+  - Proper names are required case-sensitively inside the `re.I` patterns with `(?-i:[A-Z])` (membership, transfer
+    "from X"), so "members of the community" / "transfer students from any college" do not match. Membership also
+    has a lookahead that skips "the community / graduating class / class / public / student body / team / household /
+    family". Known clubs (USATT, 4-H, FFA, Boy/Girl Scouts) need a member/membership/club word next to them, so a
+    title like "FFA Scholarship" alone is not a group limit.
+  - "recipients of (a|the) X scholarship" needs at least one word before "scholarship", is skipped at the start of a
+    sentence ("Recipients of the … will …") and when X is this award's own name (renewal rules). "receiving a
+    scholarship" with no name in between does not match.
+  - A sentence saying the group is "not eligible" / "ineligible" / "excluded" is skipped.
+  - The phrase runs from the match to the end of its clause (cut at `, ; :`, " who ", " by ", " and must/be/have/…");
+    capped at 90 characters; a leading article is dropped. `sentences()` splits "Clara B. Vaughan" after the
+    initial, so `restricted_groups` re-joins a sentence that ends in a single capital initial with the next one (only
+    for this field; other extraction is unchanged).
+- **Check.** Overlap = shared words after removing a stop list of generic group words (child, employee, member,
+  descendant, scholarship, transfer, college, community, company, …) and US state names, so "Virginia Tech employee"
+  does not match "tobacco growers in Southside Virginia". Pass → "Only for a specific group: “…”. This matches
+  something you listed under Affiliations." (the detail never repeats the student's own text, because check details
+  reach the chat agent). `no_special_affiliations` with no overlap → fail. Otherwise restrictive unknown with "Add
+  this under Affiliations if it applies to you." An overlap wins over the tick box.
+- **Tests.** `test_units.py`: positives for every family (13 sentences), negatives (13 sentences, including two
+  "preference/priority" sentences, "members of the community", "member of the graduating class", "Recipients of this
+  scholarship will…", "students with a disability", "transfer students"), the preference sentence lands in
+  `soft_criteria`, grounded evidence, `group_check` pass/fail/unknown and the state-name/generic-word guard, ranking
+  below an open award, `to_criteria` carry-over. `test_pipeline.py`: the conftest 4-H award is kept with a "Verify —
+  Specific group" flag (restrictive) for a student with no affiliations, passes for a 4-H member and is excluded with
+  `no_special_affiliations`; `test_no_pii_reaches_agents` now sets affiliations, runs the chat on the 4-H award (whose
+  "Specific group" check passes) and asserts the affiliation text and both field names never reach a prompt.
+- **xfails.** All 12 WP3 entries removed. **Also removed the two WP6 entries for SC National Guard CAP (`r1p3`,
+  `derek`)**: the generic membership pattern reads "members of the South Carolina Army and Air National Guard", so the
+  expected restrictive `Specific group` unknown is there now. WP6 still has to add the fail path for
+  `military_affiliation is False`. Remaining: WP4 6, WP5 12, WP6 10 (28). No `expect` value was changed.
+- **Eval (as of 2026-11-12, rule-based).** Regression corpus (`--corpus`), rules-2/rubric-3 → rules-3/rubric-4:
+  ```
+  profile  eligible matches known_inel inel_top10 elig_lost      (before: inel_top10)
+  r1p1            9       9          0          0         0
+  r1p2           15      15          6          5         0      (4)
+  r1p3            5       5          5          5         0
+  r1p4           23      23          0          0         0
+  maya           11      11          6          6         0
+  derek           4       4          3          3         0
+  aisha          22      22         12          3         0      (5)
+  sam             6       6          0          0         2
+  total          95      95         32         22         2      (23)
+  ```
+  Local catalog: **unchanged** (159 / 104 / 43 / 18 / 2): the local VT rows are title-only, so no group text exists.
+  `elig_lost` did not grow. `eligible` and `known_inel` cannot drop under D1 (a silent profile gets unknown, not fail);
+  the effect is in the ranking: every group-limited row now has 0–50% certainty and about a quarter of the chance, so
+  in Aisha's list McGuireWoods, Smithfield, Universal Leaf, VCCS, Mossberg, Vaughan, Tribal Match and Graham Stedman
+  Neal fell from the top ten to ranks 13–21 of 22. **Why r1p2 went from 4 to 5:** r1p2 has only 15 eligible rows, 9 of
+  them group-limited, so at least four group rows must fill the top ten. They are now ranks 6–14, but which ones land
+  in ranks 6–10 is a tie broken alphabetically (Buzz's Bunch and Vaughan are labelled ineligible for r1p2; McGuireWoods
+  etc. are not, because the notes did not test them on r1p2). Buzz's Bunch ranks first among them because it also has
+  a normal Disability unknown, which counts 0.5 and lifts its certainty ratio to 25% (a WP2 ratio quirk, not changed
+  here). Faculty-Staff Dependent stays in Aisha's top ten (rank 10, 50%: its Education level check passes).
+- **Not checked in the running app**: the Profile form fields (the session could not drive a browser; `app.py` parses).
+  Check them during WP8.
 
 ## WP4 — Locality, school and out-of-state limits (items 3, 6)
 

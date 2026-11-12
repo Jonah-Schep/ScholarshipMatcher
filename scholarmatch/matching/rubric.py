@@ -56,6 +56,7 @@ def narrowing(c: Criteria) -> list[str]:
     if c.disability_required: out.append("disability-specific")
     if c.pell_required or c.need_based: out.append("need-based")
     if c.class_years: out.append("specific class year")
+    if c.restricted_groups: out.append("limited to a specific group")
     return out
 
 
