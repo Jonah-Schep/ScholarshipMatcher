@@ -376,16 +376,10 @@ def test_group_limited_award_ranks_below_and_narrows():
 
 def test_to_criteria_carries_restricted_groups_from_rules():
     from scholarmatch.agents.workers import to_criteria
-    from scholarmatch.models import ExtractedCriteria
+    from tests.conftest import empty_extraction
     rules = extract_rules.extract(sch("g", "Example Scholarship", "For children of employees of Acme Corp."))
-    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
-                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
-                          first_generation_required=None, military_affiliation_required=None,
-                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
-                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
-                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
-                          evidence=[])
-    c = to_criteria(x, rules)
+    x = empty_extraction()
+    c = to_criteria(x, rules, "")
     assert c.restricted_groups == ["children of employees of Acme Corp"]
     assert c.evidence["restricted_groups"] == rules.evidence["restricted_groups"]
 
@@ -524,21 +518,15 @@ def test_out_of_state():
 def test_wp4_fields_narrow_and_carry_over():
     from scholarmatch.agents.workers import to_criteria
     from scholarmatch.matching import rubric
-    from scholarmatch.models import ExtractedCriteria
+    from tests.conftest import empty_extraction
     fox = sch("f", "X", "Open to seniors enrolling at Central Piedmont Community College.")
     cf = extract_rules.extract(fox)
     assert rubric.pool_tier(fox, cf) == "school"
     out = sch("o", "X", "Open to out-of-state students.", source="academicworks_vt", school="vt", geo_scope="va")
     co = extract_rules.extract(out)
     assert "out-of-state students only" in rubric.narrowing(co)
-    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
-                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
-                          first_generation_required=None, military_affiliation_required=None,
-                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
-                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
-                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
-                          evidence=[])
-    c1, c2 = to_criteria(x, cf), to_criteria(x, co)
+    x = empty_extraction()
+    c1, c2 = to_criteria(x, cf, ""), to_criteria(x, co, "")
     assert c1.destination_schools == ["Central Piedmont Community College"]
     assert c1.evidence["destination_schools"] == cf.evidence["destination_schools"]
     assert c2.non_resident_required is True
@@ -733,19 +721,13 @@ def test_locality_with_another_way_in():
 
 def test_wp5_fields_carry_over():
     from scholarmatch.agents.workers import to_criteria
-    from scholarmatch.models import ExtractedCriteria
+    from tests.conftest import empty_extraction
     rules = _ex("For students in the College of Health and Human Sciences. Applicants must be enrolled in the "
                 "nursing program.")
     assert rules.declared_major_required and not rules.majors_from_unit    # nursing is named, so not unit-only
     unit = _ex("For students in the College of Health and Human Sciences.")
-    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[],
-                          majors=["Health and Human Sciences"], need_based=None, pell_required=None, gender=None,
-                          ethnicities=[], disability_required=None, first_generation_required=None,
-                          military_affiliation_required=None, us_citizen_or_resident_required=None, num_awards=None,
-                          essay_count=None, recommendation_letters=None, transcript=None, interview=None, fafsa=None,
-                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
-                          evidence=[])
-    c1, c2 = to_criteria(x, rules), to_criteria(x, unit)
+    x = empty_extraction(majors=["Health and Human Sciences"])
+    c1, c2 = to_criteria(x, rules, ""), to_criteria(x, unit, "")
     assert c1.declared_major_required is True and c1.evidence["declared_major_required"] == \
         rules.evidence["declared_major_required"]
     assert c2.majors_from_unit is True and c2.evidence["majors_from_unit"] == unit.evidence["majors_from_unit"]
@@ -879,17 +861,11 @@ def test_national_guard_group():
 
 def test_wp6_fields_carry_over():
     from scholarmatch.agents.workers import to_criteria
-    from scholarmatch.models import ExtractedCriteria
+    from tests.conftest import empty_extraction
     rules = _ex("Residents who are at least 60 years old. For a statewide technical college scholarship program.")
     assert rules.min_age == 60 and rules.institution_types == ["technical"]
-    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
-                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
-                          first_generation_required=None, military_affiliation_required=None,
-                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
-                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
-                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
-                          evidence=[])
-    c = to_criteria(x, rules)
+    x = empty_extraction()
+    c = to_criteria(x, rules, "")
     assert c.min_age == 60 and c.institution_types == ["technical"]
     assert c.evidence["min_age"] == rules.evidence["min_age"]
     assert c.evidence["institution_types"] == rules.evidence["institution_types"]
@@ -961,3 +937,123 @@ def test_long_single_token_extracts_quickly():
         start = time.perf_counter()
         extract_rules.extract(s)
         assert time.perf_counter() - start < 0.5, token[:4]
+
+
+# ----------------------------------------------------------------------------- WP7: Extractor merge with the rules
+def _fe(**quotes):
+    from scholarmatch.models import FieldEvidence
+    return [FieldEvidence(field=f, quote=q) for f, q in quotes.items()]
+
+
+def test_to_criteria_merge_policy():
+    from scholarmatch.agents.workers import HARD_FIELDS, to_criteria, ungrounded_fields
+    from scholarmatch.models import Criteria, ExtractedCriteria
+    from tests.conftest import empty_extraction
+    s = sch("m", "Example Scholarship",
+            "Open to students from Northampton or Accomack counties. Students from Chincoteague may also apply. "
+            "Applicants must be at least 21 years old. Minimum GPA of 3.0 required.")
+    rules, text = extract_rules.extract(s), s.full_text()
+    assert rules.min_age == 21 and rules.min_gpa == 3.0 and rules.gender is None
+    x = empty_extraction(localities=["Chincoteague"], min_age=25, min_gpa=3.5, gender="female",
+                         evidence=_fe(localities="Students from Chincoteague may also apply",
+                                      min_age="NOT IN THE LISTING AT ALL", min_gpa="Minimum GPA of 3.0 required",
+                                      gender="female students only, invented"))
+    assert set(ungrounded_fields(x, text)) == {"min_age", "gender"}
+    c = to_criteria(x, rules, text)
+    # list field: union, rule entries first, the rule's evidence kept
+    assert c.localities[:2] == rules.localities and c.localities[-1] == "Chincoteague"
+    assert c.evidence["localities"] == rules.evidence["localities"] and "localities" not in c.from_rules
+    # ungrounded scalar: rule value with rule evidence; an ungrounded LLM-only restriction is dropped
+    assert c.min_age == 21 and c.evidence["min_age"] == rules.evidence["min_age"] and "min_age" in c.from_rules
+    assert c.gender is None and "gender" not in c.evidence
+    assert any(n.startswith("gender: AI extraction had no supporting quote") for n in c.notes)
+    # grounded scalar that differs from the rules: the LLM value, with a note
+    assert c.min_gpa == 3.5 and any(n.startswith("min_gpa: rules read 3.0") for n in c.notes)
+    assert all(f in Criteria.model_fields and f in ExtractedCriteria.model_fields for f in HARD_FIELDS)
+
+
+def test_to_criteria_keeps_rule_graduate_level_and_class_years():
+    from scholarmatch.agents.workers import to_criteria
+    from tests.conftest import empty_extraction
+    cns = sch("c", "Clinical Nurse Specialist Scholarship", "For students in the Clinical Nurse Specialist program.")
+    rising = sch("r", "Rising Seniors Award", "Open to rising seniors in any major.")
+    assert extract_rules.extract(cns).levels == ["graduate"]
+    assert extract_rules.extract(rising).class_years == ["junior", "senior"]
+    for s in (cns, rising):
+        rules = extract_rules.extract(s)
+        c = to_criteria(empty_extraction(), rules, s.full_text())
+        assert c.levels == rules.levels and c.class_years == rules.class_years
+        assert c.evidence.get("levels") == rules.evidence.get("levels")
+        assert c.evidence.get("class_years") == rules.evidence.get("class_years")
+
+
+def test_rule_only_undergrad_level_keeps_rule_meaning_in_llm_mode():
+    from scholarmatch.agents.workers import to_criteria
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    from tests.conftest import empty_extraction
+    s = sch("u", "Current Students Award", "Open to currently enrolled undergraduate students.")
+    rules = extract_rules.extract(s)
+    assert rules.levels == ["undergrad"]
+    senior = StudentProfile(profile_id="x", level="hs_senior")
+
+    def level(c):
+        return next(h for h in hard_filter.check(s, c, senior) if h.name == "Education level").result
+
+    assert level(rules) == "unknown"
+    assert level(to_criteria(empty_extraction(), rules, s.full_text())) == "unknown"       # carried from rules
+    confirmed = empty_extraction(levels=["undergrad"], evidence=_fe(levels="currently enrolled undergraduate students"))
+    assert level(to_criteria(confirmed, rules, s.full_text())) == "fail"                 # the Extractor confirmed it
+
+
+def test_to_criteria_new_fields_from_the_extractor():
+    from scholarmatch.agents.workers import to_criteria
+    from tests.conftest import empty_extraction
+    s = sch("n", "Example Scholarship", "For students in the College of Health and Human Sciences. "
+            "Open to students at a two-year college.")
+    rules = extract_rules.extract(s)
+    x = empty_extraction(
+        destination_schools=["Lord Fairfax Community College"], institution_types=["two_year"], min_age=30,
+        non_resident_required=True,
+        evidence=_fe(destination_schools="Lord Fairfax Community College",
+                     institution_types="Open to students at a two-year college"))
+    c = to_criteria(x, rules, s.full_text())
+    assert c.destination_schools == [] and c.min_age is None and c.non_resident_required is None   # ungrounded
+    assert c.institution_types == ["two_year"]
+    assert c.majors == rules.majors and c.majors_from_unit is True                                # rule flag kept
+    # majors only the Extractor found: `majors_from_unit` is recomputed from its quote
+    bare = rules.model_copy(update={"majors": [], "majors_from_unit": None, "evidence": {}})
+    unit_quote = "students in the College of Health and Human Sciences"
+    cu = to_criteria(empty_extraction(majors=["health sciences"], evidence=_fe(majors=unit_quote)), bare, s.full_text())
+    assert cu.majors == ["health sciences"] and cu.majors_from_unit is True
+    assert cu.evidence["majors_from_unit"] == unit_quote
+    nurse = sch("q", "Example Scholarship", "Applicants must be majoring in nursing.")
+    cn = to_criteria(empty_extraction(majors=["nursing"], evidence=_fe(majors="majoring in nursing")), bare,
+                     nurse.full_text())
+    assert cn.majors == ["nursing"] and cn.majors_from_unit is None
+
+
+def test_majors_only_from_unit():
+    assert extract_rules.majors_only_from_unit("For students in the College of Health and Human Sciences.")
+    assert not extract_rules.majors_only_from_unit("Applicants must be majoring in nursing.")
+    assert not extract_rules.majors_only_from_unit("Students majoring in a field in the College of Engineering.")
+    assert not extract_rules.majors_only_from_unit("")
+
+
+def test_extractor_schema_and_prompt_cover_the_new_fields():
+    from scholarmatch import config
+    from scholarmatch.agents.workers import EXTRACTOR_SYSTEM, FILTER_SYSTEM, HARD_FIELDS, _DATA_RULE, _QUOTE_RULE
+    from scholarmatch.models import ExtractedCriteria
+    schema = ExtractedCriteria.model_json_schema()
+    new = ("restricted_groups", "destination_schools", "non_resident_required", "declared_major_required", "min_age",
+           "institution_types")
+    for f in new:
+        assert f in schema["required"] and f"- {f}:" in EXTRACTOR_SYSTEM and f in HARD_FIELDS
+    assert set(schema["required"]) == set(schema["properties"])          # every field required, as before
+    assert '"member of 4-H"' in EXTRACTOR_SYSTEM.split("- restricted_groups:")[1]
+    assert "4-H" not in EXTRACTOR_SYSTEM.split("- soft_criteria:")[1].split("- residency_states:")[0]
+    for prompt in (EXTRACTOR_SYSTEM, FILTER_SYSTEM):
+        assert _DATA_RULE in prompt
+    assert _QUOTE_RULE in EXTRACTOR_SYSTEM and _QUOTE_RULE in FILTER_SYSTEM
+    assert 'When in doubt choose "uncertain"' in FILTER_SYSTEM and "restricted_groups" in FILTER_SYSTEM
+    assert config.PROMPT_VERSION == "p2"

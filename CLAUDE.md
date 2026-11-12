@@ -64,6 +64,8 @@ Full sequence diagram: `docs/architecture.md`.
    `matching/rubric.py`. Changing weights or tiers → bump `config.RUBRIC_VERSION`.
 3. **Grounding gate.** Every agent quote is checked with `textutil.is_grounded` against
    `Scholarship.full_text()`; student evidence must appear in the redacted profile. Do not bypass.
+   An Extractor value for a field in `workers.HARD_FIELDS` counts only when its quote is grounded; `to_criteria`
+   then keeps the rule value when the model gave none (lists: union). New hard `Criteria` fields go in `HARD_FIELDS`.
 4. **Unknown is not fail.** Only a definite fail excludes; unknown keeps the item and adds a "Verify" flag.
    Preference language ("preference given to") is soft, never hard.
 5. **Fail safe, fail open.** Supervisor loops are capped at `MAX_SUPERVISOR_ROUNDS`. On exhaustion or an
@@ -103,6 +105,7 @@ Full sequence diagram: `docs/architecture.md`.
 | New eligibility rule | `ingest/extract_rules.py` (regex), `models.Criteria`/`ExtractedCriteria`, `hard_filter.check`, extractor prompt |
 | Scoring weights, chance model, sort orders | `matching/rubric.py` |
 | Prompts and agent contracts | `agents/workers.py`, `models.py` |
+| How Extractor output and rule criteria are merged (grounding, union, rule fallback, `from_rules`) | `workers.to_criteria` / `HARD_FIELDS` |
 | Supervisor checks / retry policy | `agents/supervisor.py` |
 | New scraper | new module in `scrapers/`, register in `scrapers/runner.py`, add a trimmed real fixture + parser test |
 
@@ -121,9 +124,9 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 207 collected = 203 pass + 4 strict xfail (the regression corpus; all "WP6-supplement": they wait
+  audit). Tests: 216 collected = 212 pass + 4 strict xfail (the regression corpus; all "WP6-supplement": they wait
   on the user's PDF values, see item 5 below). Major matching by specific field and the "graduating senior" rule were
-  fixed in `rules-2`. Fix plan WP0–WP6 done (WP6 except the supplement values).
+  fixed in `rules-2`. Fix plan WP0–WP7 done (WP6 except the supplement values); WP8 (re-scrape + manual test round 3) is next.
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
@@ -137,7 +140,7 @@ Full sequence diagram: `docs/architecture.md`.
   co-op, SSD registration, transfers, a medical condition) from hard sentences only. `hard_filter.group_check` →
   "Specific group": pass on a distinctive-word overlap with `StudentProfile.affiliations`, fail only when
   `no_special_affiliations` is ticked, else a restrictive unknown (decision D1). Both profile fields stay local; the
-  check detail never repeats the affiliation text. `workers.to_criteria` carries `restricted_groups` from rules until WP7.
+  check detail never repeats the affiliation text. In LLM mode the Extractor also fills `restricted_groups` (merged as below).
 - Locality, college, out-of-state (`rules-4`, `rubric-5`): `extract_rules.localities` reads county lists, "City of X",
   "X Public Schools" and "X High School" only behind restrictive wording ("students from", "residents of", "graduates
   of", "senior at", "must attend", "X County residents"), never from preference sentences, biographies or addresses.
@@ -145,8 +148,7 @@ Full sequence diagram: `docs/architecture.md`.
   school system vs county or city; high school vs `p.high_school`); a county limit with only a city given is unknown.
   `Criteria.destination_schools` ("enrolling at X Community College", rows without `s.school`) → "College attending";
   `Criteria.non_resident_required` ("out-of-state students", "non-residents of Virginia") → "Residency" (fail for the
-  school's own state, restrictive unknown when "or" offers another way in). `to_criteria` carries both from rules
-  (`workers._RULE_ONLY_FIELDS`) until WP7. Check details never repeat the student's county / city / high school.
+  school's own state, restrictive unknown when "or" offers another way in). The Extractor fills both too (merged as below). Check details never repeat the student's county / city / high school.
   A locality sentence that offers a non-place alternative after the place ("… Counties or have accessed …") gives a
   restrictive unknown instead of a fail (`extract_rules.locality_has_alternative`, `rules-5`).
 - Graduate programs, units, declared majors (`rules-5`): `extract_rules.GRADUATE_PROGRAMS` (CNS, NP, nurse anesthesia,
@@ -160,8 +162,9 @@ Full sequence diagram: `docs/architecture.md`.
   field → unknown). `Criteria.declared_major_required` ("declared major", "enrolled in the nursing program", "admitted to
   the College of X") turns a high-school senior's Field-of-study pass into unknown. New fields `human development`,
   `rehabilitation`, `communication sciences and disorders`; "<Field> student(s)/majors" is a major trigger. "rising X"
-  stores the year below and X; a student whose year is X gets an unknown Class year. Both new flags are carried by
-  `to_criteria` from rules (they only soften a pass, so they are safe on LLM-extracted majors).
+  stores the year below and X; a student whose year is X gets an unknown Class year. In LLM mode `declared_major_required` is
+  an Extractor field; `majors_from_unit` is not asked of the model (rule flag, or recomputed from the LLM's majors quote
+  with `extract_rules.majors_only_from_unit`).
 - SC CHE programs (`rules-6`): `Criteria.min_age` ("at least 60 years old", "age N or older", "Residents Over 60" in
   the name) → "Age" check against the optional, local-only `StudentProfile.age` (pass/fail; no age + high-school senior
   + `min_age >= 25` → fail, with the assumption stated; otherwise unknown, restrictive from 25). `Criteria.institution_types`
@@ -170,7 +173,13 @@ Full sequence diagram: `docs/architecture.md`.
   → "Type of college": `config.SCHOOLS` are four-year, "… Technical/Community College" names are two-year; fail only
   when every school on the profile is known and none fits. National Guard membership is a `restricted_groups` entry;
   `military_affiliation is False` makes "Specific group" fail. "Enhancement" sentences are left out of the majors and
-  declared-major passes (LIFE / Palmetto Fellows have no major limit). Both new fields are carried by `to_criteria`.
+  declared-major passes (LIFE / Palmetto Fellows have no major limit). Both are Extractor fields too.
+- Extractor merge (WP7, `PROMPT_VERSION = "p2"`): `ExtractedCriteria` has the WP3–WP6 fields. `workers.to_criteria(x,
+  rules, text)`: for every `HARD_FIELDS` field an ungrounded LLM value is dropped (rule value + note); lists are the union
+  of rule and grounded LLM values with the rule's evidence; a grounded scalar replaces the rule value; a null/false
+  from the model keeps the rule value. `Criteria.from_rules` lists fields that are the rule value alone; `hard_filter`
+  then reads `levels` with the rule-mode meaning. The Filter prompt does not re-judge `restricted_groups`.
+  Not yet run against a live model (see `docs/fix_plan.md` → "WP7 notes" for what to check in WP8).
 - Supplements (decision D2): `manual_sources/supplements/sc_che.csv` (`source_id, requirement, source_url`) holds
   requirements typed from the program PDFs; `ingest/supplements.apply` appends filled-in rows to `eligibility`, adds
   the PDF to `sources`, sets `confidence="medium"`; `TODO…` placeholders and rows without a URL are ignored. The

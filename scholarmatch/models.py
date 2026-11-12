@@ -107,6 +107,10 @@ class Criteria(BaseModel):
     scam_signals: list[str] = Field(default_factory=list)
     evidence: dict[str, str] = Field(default_factory=dict)      # field -> verbatim quote
     extracted_by: Literal["rules", "llm+rules"] = "rules"
+    # LLM mode only: hard fields whose value is the rule value alone (the Extractor added nothing grounded). The hard
+    # filter then reads them with the rule-mode meaning (e.g. a rule-found "undergrad" level stays a Verify for a
+    # high-school senior instead of the stricter reading it gives an Extractor-confirmed level).
+    from_rules: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)              # supervisor / validation notes
 
 
@@ -188,6 +192,12 @@ class ExtractedCriteria(BaseModel):
     first_generation_required: Optional[bool]
     military_affiliation_required: Optional[bool]
     us_citizen_or_resident_required: Optional[bool]
+    restricted_groups: list[str]
+    destination_schools: list[str]
+    non_resident_required: Optional[bool]
+    declared_major_required: Optional[bool]
+    min_age: Optional[int]
+    institution_types: list[Literal["two_year", "technical", "four_year"]]
     num_awards: Optional[int]
     essay_count: Optional[int]
     recommendation_letters: Optional[int]

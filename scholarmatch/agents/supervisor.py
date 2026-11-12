@@ -22,8 +22,8 @@ from .. import config, db
 from ..ingest import extract_rules
 from ..llm import LLM, LLMError, dumps, get_llm
 from ..matching import hard_filter, rubric
-from ..models import (Criteria, Exclusion, FilterVerdict, MatchResult, MatchRun, Scholarship, ScoreJudgement,
-                      StudentProfile)
+from ..models import (Criteria, Exclusion, ExtractedCriteria, FilterVerdict, MatchResult, MatchRun, Scholarship,
+                      ScoreJudgement, StudentProfile)
 from ..textutil import is_grounded, norm, now_iso, sha, today_iso
 from . import workers
 
@@ -170,40 +170,28 @@ class Supervisor:
         cached = db.get_criteria(s.key, "llm", chash, version)
         if cached:
             return cached
-        text, feedback, c = s.full_text(), "", rules
+        text, feedback, x = s.full_text(), "", None
         for round_no in range(config.MAX_SUPERVISOR_ROUNDS):
             x = workers.run_extractor(self.llm, s, feedback)
-            c = workers.to_criteria(x, rules)
-            bad = self._ungrounded_fields(c, text)
+            bad = self._ungrounded_fields(x, text)
             if not bad:
                 break
             self._audit("extractor", "rejected", {"key": s.key, "round": round_no + 1, "ungrounded": bad})
             feedback = ("These fields had no verbatim supporting quote in the listing: " + ", ".join(bad) +
                         ". Re-read the listing. Either quote the exact supporting text or set the field to null/empty.")
-        for f in self._ungrounded_fields(c, text):          # still unsupported -> fall back to rules value
-            setattr(c, f, getattr(rules, f))
-            c.notes.append(f"{f}: AI extraction had no supporting quote; used rule-based value.")
-        if rules.min_gpa and c.min_gpa and abs(rules.min_gpa - c.min_gpa) > 0.01:
-            c.notes.append(f"GPA minimum: rules read {rules.min_gpa}, AI read {c.min_gpa} (AI value used; quote verified).")
+        # Still unsupported values are dropped in favour of the rule value; rule-found restrictions are kept and list
+        # fields are the union of rules and grounded LLM values (see workers.to_criteria).
+        c = workers.to_criteria(x, rules, text)
         if c.requirements.essay_count is None:
             c.requirements.essay_count = rules.requirements.essay_count
         db.put_criteria(s.key, "llm", chash, version, c)
         return c
 
-    _HARD_FIELDS = ("min_gpa", "residency_states", "localities", "levels", "majors", "gender", "ethnicities",
-                    "pell_required", "disability_required", "first_generation_required",
-                    "military_affiliation_required", "us_citizen_or_resident_required")
+    _HARD_FIELDS = workers.HARD_FIELDS
 
-    def _ungrounded_fields(self, c: Criteria, text: str) -> list[str]:
-        """A hard criterion can only exclude a student if its quote really is in the listing."""
-        bad = []
-        for f in self._HARD_FIELDS:
-            v = getattr(c, f)
-            if v in (None, [], False):
-                continue
-            if not is_grounded(c.evidence.get(f, ""), text):
-                bad.append(f)
-        return bad
+    def _ungrounded_fields(self, x: ExtractedCriteria, text: str) -> list[str]:
+        """A hard criterion from the Extractor can only exclude a student if its quote really is in the listing."""
+        return workers.ungrounded_fields(x, text)
 
     def _supervised_filter(self, s: Scholarship, c: Criteria, view: dict) -> FilterVerdict:
         feedback, v = "", None

@@ -22,7 +22,7 @@ Streamlit app ── profile ──► Supervisor ──────────
 | Component | Kind | Job | Output contract |
 |---|---|---|---|
 | Supervisor | code | Owns control flow; gates every agent; retries with feedback; fails safe; writes the audit log | `MatchRun` |
-| Extractor | LLM | Listing text → structured eligibility with a verbatim quote per field | `ExtractedCriteria` |
+| Extractor | LLM | Listing text → structured eligibility with a verbatim quote per field (GPA, residency, localities, levels, class years, majors, declared major, demographics, specific groups, destination college, out-of-state, minimum age, kind of college); merged with the rule-based criteria by `workers.to_criteria` | `ExtractedCriteria` |
 | Filter | LLM | Catch free-text requirements the rules missed (memberships, employers, programs) | `FilterVerdict` keep / drop / uncertain |
 | Scorer | LLM | Judge fit as strong / moderate / weak / none with evidence pairs; essay reuse | `ScoreJudgement` |
 | Verifier | LLM | Independently check each of the Scorer's claims against the sources | `Verification` |
@@ -59,6 +59,7 @@ sequenceDiagram
                 Ext-->>Sup: criteria + quotes
                 Sup->>Sup: every hard field's quote verbatim in listing?
             end
+            Sup->>Sup: merge with rule criteria (ungrounded → rule value; lists → union; rule restriction kept if the model gave none)
             Sup->>Sup: re-run rule checks with refined criteria
             loop max 2 rounds
                 Sup->>Fil: listing + redacted profile
@@ -91,7 +92,7 @@ sequenceDiagram
 |---|---|---|
 | 1. Student PII reaches the LLM | Data minimisation + provider choice | `redacted_view()` omits name, contact, sub-state location and demographics; those are matched locally. Essays → PII-stripped themes. Provider is swappable (`anthropic`, or any OpenAI-compatible endpoint such as an institution-hosted gateway) behind one interface. Verified by `test_no_pii_reaches_agents`. |
 | 2. Hallucinated match / non-match | Deterministic-first + grounding gate + fail-open | Structured rules decide eligibility in code. An agent can only remove a scholarship with a verbatim quote of the requirement; otherwise the verdict becomes "uncertain" and the item stays, flagged. |
-| 3. Missed or invented criteria; context rot on long listings | Reflexion (one feedback retry) + rule cross-check + isolation | One listing per call. Each extracted hard field needs a verbatim quote or it is sent back, then discarded in favour of the rule-based value. Rule/LLM disagreements on GPA are noted. |
+| 3. Missed or invented criteria; context rot on long listings | Reflexion (one feedback retry) + rule cross-check + isolation | One listing per call. Each extracted hard field (`workers.HARD_FIELDS`) needs a verbatim quote or it is sent back, then discarded in favour of the rule-based value. List fields are the union of rule and grounded LLM values; a rule-found restriction is kept when the model returns nothing, so the agent can add a grounded restriction but never silently drop one. Rule/LLM disagreements and additions are noted on the criteria. |
 | 4. Non-deterministic scoring and probabilities | Categorical judgement + code-side rubric; chain-of-verification; response cache | Agents never emit numbers. The Verifier re-checks each claim independently; disagreement → feedback → retry → conservative rating. Identical inputs hit the cache, identical requests return the stored run. |
 | 5. Chat context rot / forgetting its reasoning | Re-grounding every turn + persisted history + compaction + tools | The listing and the stored rubric are re-injected each turn (the agent never relies on its own earlier text); turns are saved; older turns are summarised past 8; two read-only tools fetch other matches for comparisons. |
 | new: prompt injection via scraped text | Untrusted-data framing + no write tools | Listings are wrapped in tags and declared data-only; no agent has a tool that changes state. |

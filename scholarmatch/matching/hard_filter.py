@@ -66,7 +66,9 @@ def _tri(required, have) -> str:
 def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
     out: list[HardCheck] = []
     add = lambda name, result, detail: out.append(HardCheck(name=name, result=result, detail=detail))
-    llm = c.extracted_by == "llm+rules"
+    # The stricter LLM reading of levels applies only when the Extractor confirmed them with a grounded quote; a level
+    # carried over from the rules alone keeps its rule-mode meaning (workers.to_criteria, `from_rules`).
+    llm = c.extracted_by == "llm+rules" and "levels" not in c.from_rules
 
     if s.school:
         school_name = config.SCHOOLS[s.school][0]

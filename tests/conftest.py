@@ -64,16 +64,33 @@ def profile():
         essays=[Essay(title="Why I serve", text="...", themes=["community service", "leadership"])])
 
 
+def empty_extraction(**kw) -> ExtractedCriteria:
+    """An Extractor answer that states nothing, with `kw` overriding fields."""
+    base = dict(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
+                need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
+                first_generation_required=None, military_affiliation_required=None,
+                us_citizen_or_resident_required=None, restricted_groups=[], destination_schools=[],
+                non_resident_required=None, declared_major_required=None, min_age=None, institution_types=[],
+                num_awards=None, essay_count=None, recommendation_letters=None, transcript=None, interview=None,
+                fafsa=None, portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
+                evidence=[])
+    base.update(kw)
+    return ExtractedCriteria(**base)
+
+
 class FakeLLM(LLM):
     """Scripted agent outputs. `bad_scorer_rounds` makes the scorer hallucinate N times first."""
     name = "fake"
 
-    def __init__(self, bad_scorer_rounds=0, ungrounded_drop=False, verifier_rejects=False):
+    def __init__(self, bad_scorer_rounds=0, ungrounded_drop=False, verifier_rejects=False, extract=None):
+        """`extract`: {listing substring: {field: value, ..., "quotes": {field: quote}}} scripts extra Extractor
+        fields for the listings that contain the substring (the quotes become `evidence` entries)."""
         super().__init__()
         self.prompts = []
         self.bad_scorer_rounds = bad_scorer_rounds
         self.ungrounded_drop = ungrounded_drop
         self.verifier_rejects = verifier_rejects
+        self.extract = extract or {}
         self.scorer_calls = {}
 
     def model(self, role):
@@ -85,15 +102,15 @@ class FakeLLM(LLM):
         if schema is ExtractedCriteria:
             gpa = 3.0 if "Minimum GPA of 3.0" in listing else 3.9 if "minimum GPA of 3.9" in listing else None
             ev = [FieldEvidence(field="min_gpa", quote=f"inimum GPA of {gpa}")] if gpa else []
-            out = ExtractedCriteria(
-                min_gpa=gpa, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
-                need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
-                first_generation_required=None, military_affiliation_required=None,
-                us_citizen_or_resident_required=None, num_awards=None,
-                essay_count=1 if "essay required" in listing else None, recommendation_letters=None,
-                transcript=None, interview=None, fafsa=None, portfolio_or_audition=None, other_requirements=[],
-                soft_criteria=["leadership and community service"] if "leadership" in listing else [],
-                scam_signals=[], evidence=ev)
+            out = empty_extraction(
+                min_gpa=gpa, essay_count=1 if "essay required" in listing else None,
+                soft_criteria=["leadership and community service"] if "leadership" in listing else [], evidence=ev)
+            for needle, fields in self.extract.items():
+                if needle in listing:
+                    fields = dict(fields)
+                    quotes = fields.pop("quotes", {})
+                    out = out.model_copy(update={**fields, "evidence": out.evidence + [
+                        FieldEvidence(field=f, quote=q) for f, q in quotes.items()]})
         elif schema is FilterVerdict:
             if "4-H" in listing:
                 quote = ("NOT IN THE LISTING" if self.ungrounded_drop

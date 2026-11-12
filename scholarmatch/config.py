@@ -27,7 +27,7 @@ SCHOOLS = {  # AcademicWorks portals we scrape -> display name, state
 
 # --- Versions: bump when prompts / rules change so caches invalidate cleanly ---
 RULES_VERSION = "rules-6"
-PROMPT_VERSION = "p1"
+PROMPT_VERSION = "p2"
 RUBRIC_VERSION = "rubric-5"
 
 # --- Pipeline knobs (all deterministic) --------------------------------------

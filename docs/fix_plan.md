@@ -17,7 +17,7 @@ ends in one branch and one pull request.
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | done (2026-11-12) | `fix/still-to-fix` | `rules-4`, `rubric-5`; all 6 WP4 xfails fixed; Locality check semantics changed (see "WP4 notes"); remaining xfails WP5 12, WP6 10 |
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | done (2026-11-12) | `fix/still-to-fix` | `rules-5` (no rubric change); all 12 WP5 xfails fixed; Garris `expect` unknown → pass; WP4/WP0 carry-overs done; remaining xfails WP6 10; see "WP5 notes" |
 | WP6 SC CHE programs | 5 | WP5 | done except supplement values (2026-11-12) | `fix/still-to-fix` | `rules-6` (no rubric change); 6 of 10 WP6 xfails fixed; 4 "WP6-supplement" xfails wait on the user typing citizenship from the PDFs into `manual_sources/supplements/sc_che.csv`; `extract` no longer quadratic; Age field not checked in the running app; see "WP6 notes" |
-| WP7 Extractor agent learns the new fields | LLM parity | WP6 | todo | | |
+| WP7 Extractor agent learns the new fields | LLM parity | WP6 | done (2026-11-12) | `fix/still-to-fix` | `p2` (no rules or rubric change); merge policy covers every hard field; `from_rules`; live path not run (no network); see "WP7 notes" |
 | WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | todo | | needs network + the user |
 
 Status values: `todo`, `in progress (date)`, `done (date)`, `blocked (reason)`.
@@ -46,7 +46,9 @@ order**. WP1 touches only `app.py`, `textutil.py` and `.claude/launch.json` and 
 - **New `Criteria` fields must survive LLM mode.** `workers.to_criteria` builds the LLM criteria from the
   Extractor output and drops anything it does not copy. Until WP7, every new field added to `Criteria` must be
   copied from `rules` inside `to_criteria` (the way `application_method` is today), together with its
-  `evidence` entry. Do not add these fields to `Supervisor._HARD_FIELDS` before WP7.
+  `evidence` entry. Do not add these fields to `Supervisor._HARD_FIELDS` before WP7. **Since WP7:** a new hard field
+  goes into `ExtractedCriteria`, `EXTRACTOR_SYSTEM` and `workers.HARD_FIELDS` (`to_criteria` merges it generically;
+  bump `PROMPT_VERSION`).
 - **New `StudentProfile` fields stay local.** Do not add them to `redacted_view()`. `test_no_pii_reaches_agents`
   must keep passing; extend it to assert the new fields are absent from agent prompts.
 - **Every new regex gets a positive and a negative test**, including a "preference given to …" sentence that
@@ -813,6 +815,101 @@ Files: `models.py` (`ExtractedCriteria`), `agents/workers.py` (prompt, `to_crite
 - Keep the "treat as data" and quote rules in the prompt unchanged.
 
 Tests: existing pipeline tests green; new test for the ungrounded fallback; `test_no_pii_reaches_agents` green.
+
+### WP7 notes (2026-11-12)
+
+- **Code.** `models.ExtractedCriteria` gains `restricted_groups`, `destination_schools`, `non_resident_required`,
+  `declared_major_required`, `min_age`, `institution_types` (all required, as every other field; same JSON-schema
+  constructs as the existing fields: string arrays, an enum array like `levels`, nullable bool / int; checked with the
+  Anthropic SDK's local `transform_schema`; `openai_compat` embeds `model_json_schema()` in the prompt and is
+  unchanged). `majors_from_unit` is **not** asked of the model (see below). `models.Criteria.from_rules: list[str]`
+  (new, default empty). `workers`: `EXTRACTOR_SYSTEM` describes every new field plus `localities` and `class_years`
+  ("for rising years quote the sentence that says rising") and graduate/professional programs under `levels`; "member
+  of 4-H / child of an employee" moved from `soft_criteria` to `restricted_groups`. `FILTER_SYSTEM`'s already-checked
+  list now names out-of-state limits, county / city / high school, the college attended and its kind, class year,
+  declared major, age and the groups under `restricted_groups`, says "Do not judge those again", and its "drop" rule
+  for memberships / employers / family ties now excludes groups already in `restricted_groups` (those are a
+  deterministic restrictive unknown, decision D1). The "treat as data" and quote rules and "When in doubt choose
+  uncertain" are unchanged. New `workers.HARD_FIELDS` (`Supervisor._HARD_FIELDS` is that tuple),
+  `workers.ungrounded_fields(x, text)`, `workers.to_criteria(x, rules, text)` (the `text` argument is new).
+  `extract_rules.majors_only_from_unit(sentence)` (helper only; `extract` output unchanged, so no `RULES_VERSION` bump).
+  `hard_filter.check`: the stricter LLM reading of an `undergrad` level (high-school senior → fail unless the school is
+  on the list) applies only when `"levels" not in c.from_rules`. `config.PROMPT_VERSION = "p2"`. No rubric number
+  changed (`rubric-5`), no rules change (`rules-6`).
+- **Merge policy as built** (`to_criteria`, for every field in `HARD_FIELDS`: min GPA, residency, localities, levels,
+  class years, majors, gender, ethnicities, Pell, disability, first-generation, military, citizenship and the six new
+  fields):
+  - the grounding gate now runs on the **raw Extractor output** (`ungrounded_fields`), not on the merged criteria:
+    rule evidence can be a synthetic sentence (SC CHE residency "State program administered for SC residents") that is
+    not in the listing, so the old check on merged criteria would have rejected a correct rule value. A field passes when
+    any of its evidence quotes is grounded. The reflexion loop is unchanged (feedback, at most `MAX_SUPERVISOR_ROUNDS`).
+  - ungrounded LLM value → dropped, rule value and rule evidence kept, note "`f`: AI extraction had no supporting quote;
+    used rule-based value." An ungrounded LLM-only restriction therefore never excludes anyone.
+  - list fields → union (rule entries first, case-insensitive de-duplication); note "`f`: AI added …" when the LLM
+    added entries. Evidence stays the rule's evidence when the rules found anything (so `rising_years`,
+    `locality_has_alternative` and `non_resident_state` keep reading the rule sentence); an LLM-only list carries the
+    LLM quote.
+  - scalars → the grounded LLM value (note "rules read X, AI read Y" when they differ, generalising the old GPA note);
+    when the Extractor gave null / false the rule value stays. So **a rule-found restriction is never dropped because
+    the model returned nothing** — this covers `localities`, the rule's graduate-only `levels`, `class_years` and also
+    the pre-existing fields.
+  - `from_rules` lists the hard fields whose value is the rule value alone (the Extractor added nothing grounded).
+  - `majors_from_unit`: the rule flag when the rules found majors (it only softens a parent-field pass; a direct
+    hit on an LLM-added major still passes); otherwise, when only the Extractor found majors, it is recomputed with
+    `extract_rules.majors_only_from_unit` on the LLM's grounded majors quote, which becomes its evidence.
+  - `need_based`, `num_awards`, requirements, soft criteria and scam signals still come from the Extractor alone;
+    `application_method` from the rules. `need_based` can exclude (Financial need fails when the student says no
+    need) but was left out of `HARD_FIELDS` (not in the WP7 list); a later WP may add it.
+- **Deviations from the plan text.** (1) The policy applies to all hard fields, not only the new ones. Behaviour
+  change in LLM mode: before WP7 an Extractor `null` silently removed a rule restriction (e.g. the conftest
+  `svc` row lost its VA residency and hs_senior level in LLM mode); now LLM mode is never more lenient than rule mode on
+  a rule-found restriction, but it also can no longer *remove* a wrong rule restriction (only widen a list or replace a
+  scalar with a grounded value). Rule-only values that are wrong still mostly give unknowns, not fails (invariant 4).
+  (2) `class_years` joined `HARD_FIELDS` (it can exclude through "Class year"). (3) `from_rules` and the
+  `hard_filter` levels tweak were not in the plan; without them a rule-found `undergrad` level carried into LLM mode
+  would fail a high-school senior where rule mode gives unknown. (4) `test_no_pii_reaches_agents`: the field-name checks
+  (`"gender"`, `"ethnicities"`, …) now look inside the `<student_profile>` blocks, because the Filter's
+  already-checked rules may now carry the listing's own `"gender": "female"` (the `women` award); value checks
+  (name, county, city, "Hispanic", affiliation text, age 73) still run on every prompt, and `"age"` / `"ethnicities"`
+  must not appear anywhere.
+- **Tests.** `conftest.empty_extraction(**kw)` builds an Extractor answer; `FakeLLM(extract={listing substring:
+  {field: value, "quotes": {field: quote}}})` scripts the new fields. `test_pipeline.py`: an ungrounded
+  `restricted_groups` quote on the 4-H award falls back to the rule group with the rule evidence, a note, `from_rules`
+  and an `extractor / rejected` audit event; a grounded LLM-only group ("families who work at the Qwerty Mills plant",
+  which the rules miss) gives the restrictive "Specific group" unknown and a Verify flag in an LLM run; a rule-found
+  locality (Watson, Northampton / Accomack) survives an Extractor that returns none, fails a Montgomery student and passes
+  a Northampton one in an LLM run. `test_units.py`: merge policy (union, ungrounded scalar → rule value, ungrounded
+  LLM-only restriction dropped, differing grounded GPA used with a note), graduate-only level and rising class years
+  carried with their evidence, rule-only `undergrad` keeps the rule meaning until the Extractor confirms it, new fields
+  from the Extractor (ungrounded dropped, grounded kept), `majors_from_unit` recomputation, `majors_only_from_unit`,
+  schema / prompt coverage (`PROMPT_VERSION == "p2"`, data and quote rules present, 4-H moved). Four existing
+  `to_criteria` carry-over tests now use `empty_extraction()` and pass the listing text. Suite: 216 collected = 212
+  pass + 4 strict xfail ("WP6-supplement", untouched).
+- **Eval (rule-based, as of 2026-11-12).** Unchanged, as expected (WP7 only touches LLM mode): corpus 76 / 76 / 20 /
+  12 / 0, local catalog 154 / 103 / 38 / 14 / 0.
+- **Not tested live.** No network in this session; the new schema and prompts have only run against `FakeLLM`.
+- **For WP8: what to look for in the first live LLM run.**
+  - **Data & audit page:** `extractor / rejected` events. Their `ungrounded` lists name the fields the model filled
+    without a verbatim quote. Expect some on the new fields (`restricted_groups`, `destination_schools`,
+    `institution_types`, `min_age`) and on `class_years` (newly gated). Many rejections of one field across rows mean the
+    prompt line for it needs work (bump `PROMPT_VERSION`). Also `llm_failure` (provider errors; the row falls back to
+    rules) and `filter / rejected` (ungrounded drops).
+  - **Stored LLM criteria** (not shown in the UI): `SELECT key, json_extract(data,'$.notes'),
+    json_extract(data,'$.from_rules') FROM criteria WHERE kind='llm' AND version LIKE 'p2:%'`. Notes "AI added …"
+    show the LLM widening a list (check `localities`, `levels`, `majors` are real alternatives, not misreadings);
+    "rules read X, AI read Y" shows scalar disagreements (GPA, `min_age`, gender); "no supporting quote" shows dropped
+    LLM values. `from_rules` shows where the model found nothing the rules found.
+  - **Fields to eyeball against the listings:** `restricted_groups` (the LLM should now catch group limits the regexes
+    miss, giving a restrictive "Specific group" unknown, and should not put preferences there), `declared_major_required`
+    (only a Verify for high-school seniors), `institution_types` (the prompt does not say "skip when both kinds are
+    named", unlike the rules: a two-year-or-four-year listing given only one kind by the LLM is a wrong limit; the union
+    with the rule value cannot remove it), `non_resident_required` (its evidence sentence decides the school state and
+    the "or" alternative), `min_age`.
+  - **Filter agent:** with `p2` it should return `uncertain` or `keep`, not `drop`, for group limits already listed
+    under `restricted_groups`. A grounded `drop` quoting a group sentence that is in `restricted_groups` means it still
+    re-judges them; that would hide awards D1 says to keep.
+  - Compare item counts with rule-based mode: LLM mode should never show *fewer* eligible awards because of a rule
+    restriction (it keeps them); fewer items should come only from grounded LLM restrictions or Filter drops.
 
 ## WP8 — VT re-scrape and manual test round 3 (item 10)
 

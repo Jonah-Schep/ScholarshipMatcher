@@ -566,6 +566,14 @@ def _sentence_majors(sent: str) -> tuple[set[str], set[str], bool]:
     return named, from_unit, bool(_MAJOR_WORDS.search(sent))
 
 
+def majors_only_from_unit(sentence: str) -> bool:
+    """True when a sentence limits the field only through a College/School/Department name, with no major named and
+    no "major" wording ("students in the College of Health and Human Sciences"). Used to set `majors_from_unit` on
+    majors the Extractor agent found (the same test `extract` applies to its own unit sentences)."""
+    named, from_unit, major_words = _sentence_majors(sentence or "")
+    return bool(_UNIT_RX.search(sentence or "")) and not named and not major_words and bool(from_unit)
+
+
 def graduate_program(hard: list[str], school: Optional[str]) -> str:
     """The first hard sentence naming a graduate or professional program, or ""."""
     for sent in hard:

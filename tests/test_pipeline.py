@@ -108,9 +108,18 @@ def test_no_pii_reaches_agents(catalog, profile):
     ChatAgent(llm, profile, run).ask("test:svc", "What should I do first?")
     ChatAgent(llm, profile, run).ask("test:4h", "Am I eligible?")      # the chat sees its "Specific group" check
     blob = "\n".join(llm.prompts)
-    for secret in ("Jordan", "Testcase", "Montgomery", "Blacksburg", "Hispanic", '"gender":', '"ethnicities"',
-                   "Zyxwv", "Parent works at", '"affiliations"', "no_special_affiliations", '"age"', "73"):
+    for secret in ("Jordan", "Testcase", "Montgomery", "Blacksburg", "Hispanic", "Zyxwv", "Parent works at",
+                   '"affiliations"', "no_special_affiliations", "73"):
         assert secret not in blob, secret
+    # Field names are checked inside the student-profile blocks: since WP7 the Filter's list of already-checked
+    # *listing* rules may carry the award's own "gender" limit (here "female students majoring in engineering").
+    views = [part.split("</student_profile>")[0] for part in blob.split("<student_profile>")[1:]]
+    assert views
+    for view in views:
+        for key in ('"gender"', '"ethnicities"', '"affiliations"', '"age"', '"county"', '"city"', '"high_school"',
+                    '"display_name"', '"disability"'):
+            assert key not in view, key
+    assert '"age"' not in blob and '"ethnicities"' not in blob
     assert "Robotics team captain" in blob
     assert "affiliations" not in profile.redacted_view() and "no_special_affiliations" not in profile.redacted_view()
     assert "age" not in profile.redacted_view()
@@ -209,3 +218,60 @@ def test_title_only_rows_fall_in_the_pre_rank(catalog, profile):
     assert any("Only the listing title" in f for f in title.flags)
     assert keys(run).index("academicworks_vt:vt_title") > keys(run).index("test:svc")
     assert keys(run).index("academicworks_vt:vt_title") > keys(run).index("academicworks_vt:vt1")
+
+
+# ----------------------------------------------------------------------------- WP7: Extractor merge with the rules
+def _llm_criteria(llm, s):
+    from scholarmatch.ingest import extract_rules
+    rules = extract_rules.extract(s)
+    return Supervisor(llm)._llm_criteria(s, "hash-" + s.source_id, rules), rules
+
+
+def test_ungrounded_restricted_group_falls_back_to_rule_value(catalog):
+    from tests.conftest import CATALOG
+    four_h = next(s for s in CATALOG if s.source_id == "4h")
+    llm = FakeLLM(extract={"4-H": {"restricted_groups": ["children of Zeta Corp employees"],
+                                   "quotes": {"restricted_groups": "For children of Zeta Corp employees"}}})
+    c, rules = _llm_criteria(llm, four_h)
+    assert c.restricted_groups == rules.restricted_groups == ["current members of a 4-H club"]
+    assert c.evidence["restricted_groups"] == rules.evidence["restricted_groups"]
+    assert any(n.startswith("restricted_groups: AI extraction had no supporting quote") for n in c.notes)
+    assert "restricted_groups" in c.from_rules
+    rejected = [a for a in db.audit_for("") if a["event"] == "rejected"]
+    assert rejected and "restricted_groups" in str(rejected[0]["detail"])
+
+
+def test_grounded_llm_only_restricted_group_gives_restrictive_unknown(profile):
+    from scholarmatch.scrapers.runner import ingest
+    from tests.conftest import sch
+    ingest([sch("mill", "Mill Families Award", "For families who work at the Qwerty Mills plant.")])
+    offline = Supervisor(OfflineLLM()).run(profile, AS_OF)
+    assert not any(h.name == "Specific group" for h in get(offline, "test:mill").hard_checks)   # rules miss it
+    llm = FakeLLM(extract={"Qwerty Mills": {
+        "restricted_groups": ["families who work at the Qwerty Mills plant"],
+        "quotes": {"restricted_groups": "families who work at the Qwerty Mills plant"}}})
+    r = get(Supervisor(llm).run(profile, AS_OF), "test:mill")
+    assert r.mode == "llm"
+    group = next(h for h in r.hard_checks if h.name == "Specific group")
+    assert group.result == "unknown" and group.weight == "restrictive"
+    assert any(f.startswith("Verify — Specific group") for f in r.flags)
+
+
+def test_rule_locality_survives_when_extractor_returns_none(profile):
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.scrapers.runner import ingest
+    from tests.conftest import sch
+    watson = sch("watson", "Watson Scholarship", "Open to students from Northampton or Accomack counties.")
+    ingest([watson])
+    c, rules = _llm_criteria(FakeLLM(), watson)                         # the scripted Extractor gives no localities
+    assert c.extracted_by == "llm+rules" and c.localities == ["Northampton County", "Accomack County"]
+    assert c.evidence["localities"] == rules.evidence["localities"] and "localities" in c.from_rules
+
+    def locality(county):
+        p = profile.model_copy(update={"county": county})
+        return next(h for h in hard_filter.check(watson, c, p) if h.name == "Locality").result
+
+    assert locality("Montgomery") == "fail" and locality("Northampton") == "pass"
+    run = Supervisor(FakeLLM()).run(profile.model_copy(update={"county": "Northampton"}), AS_OF)
+    r = get(run, "test:watson")
+    assert r.mode == "llm" and next(h for h in r.hard_checks if h.name == "Locality").result == "pass"
