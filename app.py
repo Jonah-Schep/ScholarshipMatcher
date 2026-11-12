@@ -123,6 +123,8 @@ def page_profile(pid: str) -> None:
             disability = c2.selectbox("Documented disability?", list(YES_NO), index=yn_index(p.disability))
             military = c3.selectbox("Military / veteran family?", list(YES_NO), index=yn_index(p.military_affiliation))
             citizen = c4.selectbox("U.S. citizen / permanent resident?", list(YES_NO), index=yn_index(p.us_citizen_or_resident))
+            age = st.number_input("Age (0 = skip). Only used for awards with an age limit, such as free tuition for "
+                                  "residents over 60.", 0, 120, int(p.age or 0), 1)
             st.markdown("**Affiliations**")
             st.caption("Some awards are only for a specific group: children of a company's employees, descendants "
                        "of a named family, members of a club, transfer students, holders of another scholarship. "
@@ -161,7 +163,7 @@ def page_profile(pid: str) -> None:
             activities=lines(activities), interests=lines(interests), awards_won=lines(awards),
             gender=gender, ethnicities=eth, first_generation=YES_NO[first_gen], disability=YES_NO[disability],
             military_affiliation=YES_NO[military], us_citizen_or_resident=YES_NO[citizen],
-            affiliations=lines(affiliations), no_special_affiliations=no_special, essays=essays))
+            affiliations=lines(affiliations), no_special_affiliations=no_special, age=int(age) or None, essays=essays))
         st.session_state["pending_profile"] = pid
         st.session_state["goto"] = "Matches"
         st.rerun()

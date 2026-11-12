@@ -36,8 +36,9 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
   The README mentions a `.env.example`, but no such file exists.
 
 ## Pipeline (big picture)
-Ingest: scraper → `ingest/scam.py` (scam screen) + `ingest/extract_rules.py` (regex criteria) →
-`db.upsert_scholarships` (keyed by content hash).
+Ingest: scraper → `ingest/supplements.py` (hand-typed PDF rules from `manual_sources/supplements/<source>.csv`
+merged into `eligibility`) → `ingest/scam.py` (scam screen) + `ingest/extract_rules.py` (regex criteria) →
+`db.upsert_scholarships` (keyed by content hash). All in `scrapers/runner.ingest`.
 Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
 1. `fingerprint` (profile, catalog version, date, all version constants, provider, per-role models, candidate cap) → if a stored `MatchRun` matches, it is
    returned unchanged (`force=True` skips this). Agent responses are also cached in the DB by prompt, so a
@@ -96,6 +97,8 @@ Full sequence diagram: `docs/architecture.md`.
 |---|---|
 | Add/alter a profile field | `models.StudentProfile` (+ `redacted_view` decision), `app.page_profile`, `hard_filter.check` |
 | Group-limited awards ("children of employees of X", members, transfers) | `extract_rules.GROUP_PATTERNS`, `hard_filter.group_check` |
+| Age limits, kind of college (technical / two-year / four-year) | `extract_rules.min_age` / `institution_types`, `hard_filter.age_check` / `institution_check` |
+| Rules typed by hand from PDFs (HOPE, LIFE, Palmetto, Need-based Grant) | `manual_sources/supplements/<source>.csv`, `ingest/supplements.py`, `manual_sources/README.md` |
 | Counties, high schools, destination college, out-of-state | `extract_rules.localities` / `destination_schools` / `non_resident_required`, `hard_filter.locality_check` / `college_check` / `non_resident_check` |
 | New eligibility rule | `ingest/extract_rules.py` (regex), `models.Criteria`/`ExtractedCriteria`, `hard_filter.check`, extractor prompt |
 | Scoring weights, chance model, sort orders | `matching/rubric.py` |
@@ -118,8 +121,9 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 194 collected = 184 pass + 10 strict xfail (the regression corpus; all WP6).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP5 done.
+  audit). Tests: 207 collected = 203 pass + 4 strict xfail (the regression corpus; all "WP6-supplement": they wait
+  on the user's PDF values, see item 5 below). Major matching by specific field and the "graduating senior" rule were
+  fixed in `rules-2`. Fix plan WP0–WP6 done (WP6 except the supplement values).
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
@@ -158,6 +162,19 @@ Full sequence diagram: `docs/architecture.md`.
   `rehabilitation`, `communication sciences and disorders`; "<Field> student(s)/majors" is a major trigger. "rising X"
   stores the year below and X; a student whose year is X gets an unknown Class year. Both new flags are carried by
   `to_criteria` from rules (they only soften a pass, so they are safe on LLM-extracted majors).
+- SC CHE programs (`rules-6`): `Criteria.min_age` ("at least 60 years old", "age N or older", "Residents Over 60" in
+  the name) → "Age" check against the optional, local-only `StudentProfile.age` (pass/fail; no age + high-school senior
+  + `min_age >= 25` → fail, with the assumption stated; otherwise unknown, restrictive from 25). `Criteria.institution_types`
+  (`technical` / `two_year` / `four_year` from "technical college", "two-year public … institutions", "community
+  college", "four-year institution"; not on school portals, not in transfer sentences, nothing when both kinds are named)
+  → "Type of college": `config.SCHOOLS` are four-year, "… Technical/Community College" names are two-year; fail only
+  when every school on the profile is known and none fits. National Guard membership is a `restricted_groups` entry;
+  `military_affiliation is False` makes "Specific group" fail. "Enhancement" sentences are left out of the majors and
+  declared-major passes (LIFE / Palmetto Fellows have no major limit). Both new fields are carried by `to_criteria`.
+- Supplements (decision D2): `manual_sources/supplements/sc_che.csv` (`source_id, requirement, source_url`) holds
+  requirements typed from the program PDFs; `ingest/supplements.apply` appends filled-in rows to `eligibility`, adds
+  the PDF to `sources`, sets `confidence="medium"`; `TODO…` placeholders and rows without a URL are ignored. The
+  shipped file has only placeholders. `manual.load_all` does not read the subfolder.
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -165,7 +182,7 @@ Full sequence diagram: `docs/architecture.md`.
   That catalog is not on the Windows checkout, which has only the 77-row sample (49 of 50 VT rows title-only);
   use `eval_profiles.py --corpus` there.
 - Not built: BigFuture (terms unconfirmed), CareerOneStop (needs user's API credentials + docs), embedded
-  Google Docs on counselor pages, PDF rule extraction for SC CHE.
+  Google Docs on counselor pages, PDF rule extraction for SC CHE (replaced by the hand-typed supplement, D2).
 
 ## Still to fix (from manual tests: `docs/manual_test_2026-11-10.md`, `docs/manual_test_2026-11-10_round2.md`)
 **The plan for these is `docs/fix_plan.md`** (work packages WP0–WP8, one per session, with a status table).
@@ -180,10 +197,13 @@ False positives still dominate the results. Highest impact first:
    destination college → "College attending"; `rules-4`, `rubric-5`. Since WP5 a locality sentence with a non-place
    "or" alternative gives a restrictive unknown.)*
 4. *(Fixed in WP5: graduate and professional programs set a `graduate` level; `rules-5`.)*
-5. **SC CHE programs:** Free Tuition for Residents Over 60 (needs an age rule), SC WINS and Lottery Tuition
-   Assistance (technical/two-year colleges only, so an institution-type rule), SC National Guard CAP (Guard members
-   only; since WP3 a restrictive "Specific group" unknown, but no fail when the profile says "not military"), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
-   Fellows are wrongly excluded because the STEM/education/accounting "enhancement" text is read as a major restriction.
+5. *(Mostly fixed in WP6, `rules-6`: Free Tuition Over 60 → "Age"; SC WINS and Lottery Tuition Assistance → "Type of
+   college"; SC National Guard CAP fails when the profile says "not military"; LIFE and Palmetto Fellows are no longer
+   excluded by the "enhancement" text. The Profile form's Age field was not checked in the running app.)*
+   **Still waiting on the user:** the HOPE / LIFE / Palmetto Fellows / Need-based Grant citizenship (and, if wanted,
+   GPA) rules are only in the PDFs. Type them into `manual_sources/supplements/sc_che.csv` (replace the `TODO(user)`
+   rows; read `manual_sources/README.md` first), re-ingest, then delete the 4 "WP6-supplement" entries in
+   `tests/test_regression.py` `XFAIL` that turn into XPASS.
 6. *(Fixed in WP4: "out-of-state students" / "non-residents of X" → "Residency" check, restrictive unknown when the
    sentence offers another way in, as for O. C. Thompson.)*
 7. *(Fixed in WP5: new human development / rehabilitation / CSD fields; a college or department name alone sets

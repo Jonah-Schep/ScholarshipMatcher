@@ -170,7 +170,10 @@ GROUP_PATTERNS: dict[str, str] = {
                   r"(?!(?:community|graduating|class|public|student body|team|household|family)\b)(?-i:[A-Z0-9])"
                   r"|\bmembers? in good standing\b"
                   r"|\b(?:active |current )?(?:USATT|4-H|FFA)\b[^.;]{0,40}\b(?:members?|membership|club)\b"
-                  r"|\b(?:members?|membership)\b[^.;]{0,30}\b(?:USATT|4-H|FFA|Boy Scouts|Girl Scouts)\b",
+                  r"|\b(?:members?|membership)\b[^.;]{0,30}\b(?:USATT|4-H|FFA|Boy Scouts|Girl Scouts)\b"
+                  # National Guard (WP6): "Army National Guard members", "serving in the South Carolina National Guard"
+                  r"|\b(?:Army |Air )?National Guard (?:members?|soldiers?|airmen|service ?members?|personnel)\b"
+                  r"|\b(?:serv(?:e|es|ing) in|enlisted in) (?:the )?(?:[\w&]+ ){0,4}?National Guard\b",
     "award holders": r"\brecipients? of (?:a|an|the) (?!scholarship\b)[^.;]{1,60}?\bscholarship\b"
                      r"|\breceiving an? (?!scholarship\b)[^.;]{1,40}?\bscholarship\b"
                      r"|\bcompleted (?:a|an|the) [^.;]{0,60}?\b(?:co-?op|internship)\b(?: program\b)?"
@@ -236,8 +239,8 @@ def restricted_groups(hard: list[str], name: str = "") -> tuple[list[str], str]:
 # becomes a requirement when restrictive wording points at it ("students from", "residents of", "graduates of",
 # "senior at", "must attend", "high schools in", "<X County> residents"). So a county in a preference sentence, in
 # the sponsor's address or in the donor's biography ("born in Smyth County") is not a requirement.
-_PLACE_WORD = r"(?!(?:The|This|Each|Any|All|Every|For|From|Of|In|At|And|Or|To|A|An|Students?|Residents?|Graduates?|" \
-              r"Applicants?|Seniors?|High|School|Schools|Public|County|Counties|City|Must|Be|Have)\b)[A-Z][\w'’]*"
+_PLACE_WORD = r"(?<![\w'’])(?!(?:The|This|Each|Any|All|Every|For|From|Of|In|At|And|Or|To|A|An|Students?|Residents?|Graduates?|" \
+              r"Applicants?|Seniors?|High|School|Schools|Public|County|Counties|City|Must|Be|Have)\b)[A-Z][\w'’]*+"
 _PLACE = rf"{_PLACE_WORD}(?:(?: of)? {_PLACE_WORD}|/{_PLACE_WORD}){{0,2}}"
 _PLACE_RX = {
     # "Northampton or Accomack counties", "Mecklenburg, Union, Gaston Counties", "A, B and C Counties"
@@ -270,16 +273,21 @@ _LOC_FILLER = re.compile(r"(?:\b(?:an?|the|any|public|private)\s+)*$", re.I)    
 _LOC_CHAIN = re.compile(r"^(?:\s+in\s+[A-Z]{2}\b|,\s*[A-Z]{2}\b)?,?\s+(?:or|and)\s+(?:an?\s+|the\s+)?$")
 
 
+_LOC_WINDOW = 300     # characters before a place that are read for its trigger (keeps long sentences linear)
+
+
 def _restrictive_before(sent: str, start: int) -> bool:
-    """Is the place starting at `start` introduced by restrictive wording (a few articles may sit in between)?"""
-    head = sent[:start]
+    """Is the place starting at `start` introduced by restrictive wording (a few articles may sit in between)?
+    Only the last `_LOC_WINDOW` characters before the place are read, so a very long sentence stays linear."""
+    cut = max(0, start - _LOC_WINDOW)
+    head = sent[cut:start]
     head = head[:_LOC_FILLER.search(head).start()]
     m = _LOC_PLURAL.search(head) or _LOC_SINGULAR.search(head)
     if not m or _LOC_PAST.search(head[:m.start()]):
         return False                              # no trigger, or "The Smiths were residents of Smyth County"
     if m.re is _LOC_PLURAL:
         return True
-    return bool(_LOC_START.match(head[:m.start()]) or _LOC_SUBJECT.search(head[:m.start()]))
+    return bool((cut == 0 and _LOC_START.match(head[:m.start()])) or _LOC_SUBJECT.search(head[:m.start()]))
 
 
 def _place_names(group: str) -> list[str]:
@@ -309,7 +317,7 @@ def localities(hard: list[str]) -> tuple[list[str], str]:
             if _restrictive_before(sent, m.start()) or _LOC_AFTER.match(sent[m.end():]):
                 return True
             # "… Counties in NC or York County, SC": a place joined by "or"/"and" to one already accepted
-            return any(b <= m.start() and _LOC_CHAIN.match(sent[b:m.start()]) for _a, b in taken)
+            return any(b <= m.start() < b + 40 and _LOC_CHAIN.match(sent[b:m.start()]) for _a, b in taken)
 
         def accept(m: re.Match, *locs: str):
             for loc in locs:
@@ -398,6 +406,70 @@ def non_resident_state(sentence: str) -> Optional[str]:
         if re.search(rf"non-?residents? of (?:the (?:state|commonwealth) of )?{name}\b|non-{name} resident", low):
             return code
     return None
+
+
+# --- SC CHE programs (WP6): age, kind of college, enhancement text.
+# "at least 60 years of age", "age 60 or older", "25 years or older", "over the age of 60", "Residents Over 60".
+# A bare "over 50" needs a person word before it, so "for over 50 years" / "over 20 scholarships" do not count.
+_AGE_RX = re.compile(
+    r"\bat least (\d{2}) years? (?:of age|old)\b"
+    r"|\b(?:minimum age (?:of|is)|aged?) (\d{2})\b(?: years?(?: of age| old)?)? (?:or|and) (?:older|over|above)\b"
+    r"|\bminimum age (?:of|is) (\d{2})\b"
+    r"|\b(\d{2}) years? (?:of age |old )?(?:or|and) (?:older|over|above)\b"
+    r"|\bover the age of (\d{2})\b"
+    r"|\b(?:residents?|students?|persons?|people|individuals?|adults?|applicants?|citizens?|seniors?|those|anyone|"
+    r"wom[ae]n|m[ae]n)(?: who are)? (?:aged? )?over (\d{2})\b", re.I)
+_MIN_AGE, _MAX_AGE = 16, 99
+
+
+def min_age(hard: list[str]) -> tuple[Optional[int], str]:
+    """The minimum age a hard sentence (or the listing name, which is the first sentence) states, and the sentence.
+    A sentence that says people of that age are NOT eligible ("Students over 25 are not eligible") is skipped."""
+    for sent in hard:
+        if _GROUP_NEGATION.search(sent):
+            continue
+        for m in _AGE_RX.finditer(sent):
+            age = int(next(g for g in m.groups() if g))
+            if _MIN_AGE <= age <= _MAX_AGE:
+                return age, sent
+    return None, ""
+
+
+# Kind of college. Proper names count too ("enrolling at Central Piedmont Community College" is a two-year college).
+_INST_RX: list[tuple[str, re.Pattern]] = [(kind, re.compile(rx, re.I)) for kind, rx in (
+    ("technical", r"\btechnical (?:community )?colleges?\b|\btechnical college system\b"),
+    ("two_year", r"\btwo[- ]year (?:(?:public|private|independent|state)(?:,? (?:or|and) |, | ))*"
+                 r"(?:institutions?|colleges?|schools?)\b|\bcommunity colleges?\b|\bjunior colleges?\b"),
+    ("four_year", r"\bfour[- ]year (?:(?:public|private|independent|state)(?:,? (?:or|and) |, | ))*"
+                  r"(?:institutions?|colleges?|universit(?:y|ies)|schools?)\b"),
+)]
+# "two-year or four-year program", "two- and four-year colleges": both kinds, so no limit.
+_INST_BOTH = re.compile(r"\btwo[- ](?:year )?(?:or|and|&) four[- ]year\b|\bfour[- ](?:year )?(?:or|and|&) two[- ]year\b",
+                        re.I)
+# A college the student came FROM is not where the award is used ("transfer students from a community college").
+_INST_PAST = re.compile(r"\btransfer\w*|\bassociate(?:'s|’s)? degree|\bgraduat\w* (?:of|from)\b|\bformerly\b|"
+                        r"\bpreviously (?:attended|enrolled)|\bafter (?:completing|attending)\b", re.I)
+
+
+def institution_types(hard: list[str]) -> tuple[list[str], str]:
+    """Kinds of college the award is limited to ("technical", "two_year", "four_year"), and the first sentence."""
+    out, evidence = [], ""
+    for sent in hard:
+        if _GROUP_NEGATION.search(sent) or _INST_BOTH.search(sent) or _INST_PAST.search(sent):
+            continue
+        for kind, rx in _INST_RX:
+            if rx.search(sent) and kind not in out:
+                out.append(kind)
+                evidence = evidence or sent
+    if "four_year" in out and ({"two_year", "technical"} & set(out)):
+        return [], ""                       # the listing names both kinds in different sentences: no clear limit
+    return out, evidence
+
+
+# Scholarship-enhancement text on the LIFE / Palmetto Fellows rows ("Students in STEM, Education and Accounting majors
+# may also be eligible for additional financial assistance through Scholarship Enhancements") describes extra money for
+# some majors, not a limit on who may get the award, so it is left out of the majors pass.
+_ENHANCEMENT = re.compile(r"\benhancements?\b|\badditional \$[\d,]+[^.;]{0,80}\bmajors?\b", re.I)
 
 
 _NUMWORD = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
@@ -499,7 +571,7 @@ def graduate_program(hard: list[str], school: Optional[str]) -> str:
     for sent in hard:
         for m in GRADUATE_PROGRAMS.finditer(sent):
             head = sent[:m.start()]
-            if _PRE_PREFIX.search(head) or _CAREER_BEFORE.search(head[-60:]):
+            if _PRE_PREFIX.search(head[-8:]) or _CAREER_BEFORE.search(head[-60:]):
                 continue                     # "pre-med students", "plan to become a nurse practitioner"
             return sent
         if school == "vt" and _MIT_VT.search(sent):
@@ -595,6 +667,13 @@ def extract(s: Scholarship) -> Criteria:
     nonres, nonres_ev = non_resident_required(hard)
     if nonres:
         c.non_resident_required, ev["non_resident_required"] = True, nonres_ev
+    c.min_age, age_ev = min_age(hard)
+    if c.min_age is not None:
+        ev["min_age"] = age_ev
+    if not s.school:                      # a school's own portal: the school is known, Enrollment covers it
+        c.institution_types, inst_ev = institution_types(hard)
+        if c.institution_types:
+            ev["institution_types"] = inst_ev
 
     # --- level / class year
     # On a university's own portal "graduating senior" means a college senior; on a high-school counselor
@@ -640,6 +719,8 @@ def extract(s: Scholarship) -> Criteria:
     # source, `majors_from_unit` tells the hard filter not to treat a match as certain.
     named_f, unit_f, unit_ev, named_ev, unit_major_words = set(), set(), "", "", False
     for sent in hard:
+        if _ENHANCEMENT.search(sent):
+            continue                          # extra money for some majors, not a major limit (SC CHE, WP6)
         named, from_unit, major_words = _sentence_majors(sent)
         if named:
             named_f |= named
@@ -662,7 +743,7 @@ def extract(s: Scholarship) -> Criteria:
         if fields:
             c.majors, ev["majors"] = sorted(fields, key=order), dept
             c.majors_from_unit, ev["majors_from_unit"] = True, dept
-    declared = declared_major(hard)
+    declared = declared_major([h for h in hard if not _ENHANCEMENT.search(h)])
     if declared and c.majors:
         c.declared_major_required, ev["declared_major_required"] = True, declared
 
@@ -717,7 +798,7 @@ def extract(s: Scholarship) -> Criteria:
         m = re.search(r"\b(\d|one|two|three)\s+(?:short |brief |personal )?essays?\b", low_all)
         if m and _num(m.group(1)):
             r.essay_count = _num(m.group(1))
-        elif re.search(r"\bessay\b|personal statement|written statement|\d+[- ]word", low_all):
+        elif re.search(r"\bessay\b|personal statement|written statement|(?<!\d)\d++[- ]word", low_all):
             r.essay_count = 1
     m = re.search(r"\b(\d|one|two|three)\s+(?:letters? of recommendation|recommendation letters?|references?)", low_all)
     if m and _num(m.group(1)):

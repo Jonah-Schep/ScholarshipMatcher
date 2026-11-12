@@ -101,17 +101,19 @@ def test_ungrounded_drop_fails_open(catalog, profile):
 
 def test_no_pii_reaches_agents(catalog, profile):
     llm = FakeLLM(ungrounded_drop=True)                                  # keeps test:4h in the results
-    profile = profile.model_copy(update={"affiliations": ["Parent works at Zyxwv Holdings", "member of 4-H club"]})
+    profile = profile.model_copy(update={"affiliations": ["Parent works at Zyxwv Holdings", "member of 4-H club"],
+                                         "age": 73})
     run = Supervisor(llm).run(profile, AS_OF)
     assert next(h for h in get(run, "test:4h").hard_checks if h.name == "Specific group").result == "pass"
     ChatAgent(llm, profile, run).ask("test:svc", "What should I do first?")
     ChatAgent(llm, profile, run).ask("test:4h", "Am I eligible?")      # the chat sees its "Specific group" check
     blob = "\n".join(llm.prompts)
     for secret in ("Jordan", "Testcase", "Montgomery", "Blacksburg", "Hispanic", '"gender":', '"ethnicities"',
-                   "Zyxwv", "Parent works at", '"affiliations"', "no_special_affiliations"):
+                   "Zyxwv", "Parent works at", '"affiliations"', "no_special_affiliations", '"age"', "73"):
         assert secret not in blob, secret
     assert "Robotics team captain" in blob
     assert "affiliations" not in profile.redacted_view() and "no_special_affiliations" not in profile.redacted_view()
+    assert "age" not in profile.redacted_view()
 
 
 def test_group_limited_award_kept_with_verify_unless_student_says_none_apply(catalog, profile):

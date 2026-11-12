@@ -749,3 +749,215 @@ def test_wp5_fields_carry_over():
     assert c1.declared_major_required is True and c1.evidence["declared_major_required"] == \
         rules.evidence["declared_major_required"]
     assert c2.majors_from_unit is True and c2.evidence["majors_from_unit"] == unit.evidence["majors_from_unit"]
+
+
+# ----------------------------------------------------------------------------- WP6: SC CHE programs
+def _che_rows():
+    return {s.source_id: s for s in state_aid.parse_che(rd("sc_che.html"))[0]}
+
+
+def test_min_age_positive():
+    cases = {
+        "South Carolina residents who are at least 60 years old are eligible.": 60,
+        "Applicants must be at least 25 years of age.": 25,
+        "Open to students age 30 or older returning to school.": 30,
+        "For adult learners 25 years or older.": 25,
+        "Applicants must be over the age of 21.": 21,
+        "The minimum age is 18.": 18,
+    }
+    for text, age in cases.items():
+        c = _ex(text)
+        assert c.min_age == age, text
+        assert is_grounded(c.evidence["min_age"], text)
+    name_only = extract_rules.extract(sch("o", "Free Tuition for Residents Over 60",
+                                          "Tuition is waived on a space-available basis."))
+    assert name_only.min_age == 60
+
+
+def test_min_age_negative():
+    for text in ("Preference given to applicants at least 25 years old.",          # preference: soft
+                 "The foundation has supported students for over 50 years.",
+                 "Over 20 scholarships are awarded each year.",
+                 "Students over 25 are not eligible.",
+                 "Awarded to 60 students each year.",
+                 "Founded 60 years ago by alumni."):
+        assert _ex(text).min_age is None, text
+
+
+def test_age_check():
+    from scholarmatch.matching.hard_filter import age_check
+    assert age_check(60, _p(age=62)).result == "pass"
+    young = age_check(60, _p(age=45))
+    assert young.result == "fail" and "45" not in young.detail            # never repeats the student's age
+    senior = age_check(60, _p(level="hs_senior"))
+    assert senior.result == "fail" and "assumed" in senior.detail          # the stated assumption
+    adult = age_check(60, _p(level="undergrad"))
+    assert adult.result == "unknown" and adult.weight == "restrictive"
+    eighteen = age_check(18, _p(level="hs_senior"))                        # not an adult-learner award
+    assert eighteen.result == "unknown" and eighteen.weight == "normal"
+
+
+def test_institution_types_positive_and_negative():
+    pos = {
+        "The scholarship is a statewide technical college scholarship program.": ["technical"],
+        "A resource for residents at two-year public or independent institutions.": ["two_year"],
+        "Must be enrolled at a community college in North Carolina.": ["two_year"],
+        "For students attending a four-year institution.": ["four_year"],
+    }
+    for text, kinds in pos.items():
+        c = _ex(text)
+        assert c.institution_types == kinds, text
+        assert is_grounded(c.evidence["institution_types"], text)
+    for text in ("Enrolled in a two-year or four-year program at eligible institutions.",
+                 "Open to transfer students from a community college.",
+                 "Applicants must have earned an associate's degree at a community college.",
+                 "Preference given to students at technical colleges.",
+                 "Technical college students are not eligible."):
+        assert _ex(text).institution_types == [], text
+    # a school's own portal: the school is known, so no kind-of-college limit is read
+    assert _ex("Must be enrolled at a community college.", **_VT).institution_types == []
+
+
+def test_type_of_college_check():
+    from scholarmatch.matching.hard_filter import institution_check
+    tech = ["technical"]
+    assert institution_check(tech, _p(current_school="usc")).result == "fail"
+    assert institution_check(tech, _p(intended_schools=["usc", "ecu"])).result == "fail"
+    assert institution_check(tech, _p(current_school="Midlands Technical College")).result == "pass"
+    assert institution_check(["two_year"], _p(current_school="Central Piedmont Community College")).result == "pass"
+    assert institution_check(tech, _p()).result == "unknown"
+    assert institution_check(tech, _p(current_school="Some Other College")).result == "unknown"
+    assert institution_check(["four_year"], _p(intended_schools=["vt"])).result == "pass"
+    assert institution_check(["four_year"], _p(current_school="Midlands Technical College")).result == "fail"
+
+
+def test_enhancement_text_is_not_a_major_limit():
+    rows = _che_rows()
+    for sid in ("life-scholarship", "palmetto-fellows-scholarship"):
+        c = extract_rules.extract(rows[sid])
+        assert c.majors == [] and not c.declared_major_required, sid
+    assert _ex("Students may receive an additional $2,500 for STEM and mathematics majors.").majors == []
+    assert _ex("Applicants must be majoring in mathematics.").majors == ["mathematics"]
+
+
+def test_sc_che_programs_for_eligible_students():
+    """Plan WP6: an SC resident (citizen, GPA 3.2) keeps LIFE and HOPE; a 62-year-old SC resident passes Free Tuition;
+    a technical-college student keeps SC WINS."""
+    rows = _che_rows()
+    results = lambda s, p: {h.result for h in _checks(s, p).values()}
+    sc = dict(state="SC", us_citizen_or_resident=True, gpa=3.2)
+    hs = _p(level="hs_senior", intended_schools=["usc"], **sc)
+    for sid in ("life-scholarship", "south-carolina-hope-scholarship-freshmen", "palmetto-fellows-scholarship"):
+        assert "fail" not in results(rows[sid], hs), sid
+    older = _p(level="undergrad", age=62, **sc)
+    assert _checks(rows["free-tuition-for-residents-over-60"], older)["Age"].result == "pass"
+    assert "fail" not in results(rows["free-tuition-for-residents-over-60"], older)
+    tech = _p(level="undergrad", current_school="Midlands Technical College", **sc)
+    wins = "south-carolina-workforce-industry-needs-scholarship-sc-wins"
+    assert _checks(rows[wins], tech)["Type of college"].result == "pass"
+    assert "fail" not in results(rows[wins], tech)
+    assert _checks(rows["lottery-tuition-assistance"], tech)["Type of college"].result == "pass"
+    usc = _p(level="undergrad", current_school="usc", **sc)
+    assert _checks(rows["lottery-tuition-assistance"], usc)["Type of college"].result == "fail"
+
+
+def test_national_guard_group():
+    from scholarmatch.matching.hard_filter import group_check
+    for text in ("Open to Army National Guard members enrolled full time.",
+                 "Applicants must be serving in the South Carolina Army National Guard.",
+                 "Financial assistance to members of the South Carolina Army and Air National Guard."):
+        assert any("National Guard" in g for g in _ex(text).restricted_groups), text
+    assert _ex("Preference given to members of the National Guard.").restricted_groups == []
+    groups = ["members of the South Carolina Army and Air National Guard"]
+    assert group_check(groups, _p(military_affiliation=False)).result == "fail"
+    assert group_check(groups, _p()).result == "unknown"
+    assert group_check(groups, _p(military_affiliation=True)).result == "unknown"   # a veteran's child is not a member
+    assert group_check(groups, _p(affiliations=["SC Army National Guard"])).result == "pass"
+    cap = _che_rows()["south-carolina-national-guard-college-assistance-program-scng-cap"]
+    assert _checks(cap, _p(state="SC", military_affiliation=False))["Specific group"].result == "fail"
+
+
+def test_wp6_fields_carry_over():
+    from scholarmatch.agents.workers import to_criteria
+    from scholarmatch.models import ExtractedCriteria
+    rules = _ex("Residents who are at least 60 years old. For a statewide technical college scholarship program.")
+    assert rules.min_age == 60 and rules.institution_types == ["technical"]
+    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
+                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
+                          first_generation_required=None, military_affiliation_required=None,
+                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
+                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
+                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
+                          evidence=[])
+    c = to_criteria(x, rules)
+    assert c.min_age == 60 and c.institution_types == ["technical"]
+    assert c.evidence["min_age"] == rules.evidence["min_age"]
+    assert c.evidence["institution_types"] == rules.evidence["institution_types"]
+
+
+def _supplement(tmp_path, rows):
+    import csv
+    path = tmp_path / "sc_che.csv"
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["source_id", "requirement", "source_url"])
+        w.writerows(rows)
+    return tmp_path
+
+
+def test_supplement_merge(tmp_path):
+    """Made-up requirement text, only to test the merge mechanism; the real values are typed by the user."""
+    from scholarmatch.ingest import supplements
+    life = _che_rows()["life-scholarship"]
+    url = "https://example.org/rules.pdf"
+    text = "Students must be U.S. citizens or permanent residents."
+    d = _supplement(tmp_path, [
+        ["life-scholarship", text, url],
+        ["life-scholarship", "TODO(user): type the GPA requirement from the PDF", url],      # placeholder: ignored
+        ["life-scholarship", "An unsourced line is ignored.", ""],                           # no URL: ignored
+        ["#life-scholarship", "A commented-out line is ignored.", url],
+    ])
+    merged = supplements.apply(life, d)
+    assert merged.eligibility == text
+    assert merged.confidence == "medium" and url in merged.sources
+    assert merged.extra["supplement"] == [{"requirement": text, "source_url": url}]
+    assert supplements.apply(merged, d) == merged                              # idempotent (re-ingesting an export)
+    assert life.confidence == "high" and life.eligibility == ""                # the input row is not modified
+    c = extract_rules.extract(merged)
+    assert c.us_citizen_or_resident_required
+    assert is_grounded(c.evidence["us_citizen_or_resident_required"], merged.full_text())
+    assert _checks(merged, _p(state="SC", us_citizen_or_resident=False))["Citizenship"].result == "fail"
+    other = _che_rows()["palmetto-fellows-scholarship"]
+    assert supplements.apply(other, d) is other                                # other programs untouched
+    plain = sch("x", "X", "text")
+    assert supplements.apply(plain, d) is plain                                # other sources untouched
+
+
+def test_shipped_supplement_rows_point_at_the_programs_pdfs():
+    """Every row of the real supplement file names an SC CHE program and one of that program's own PDF links, and no
+    placeholder text is ever merged."""
+    import csv
+    from scholarmatch.ingest import supplements
+    rows = _che_rows()
+    with (supplements.SUPPLEMENT_DIR / "sc_che.csv").open(encoding="utf-8-sig", newline="") as f:
+        lines = list(csv.DictReader(f))
+    assert lines
+    for line in lines:
+        s = rows[line["source_id"]]
+        assert line["source_url"] in {d["url"] for d in s.extra["documents"]}, line
+        assert "TODO" not in supplements.apply(s).eligibility
+
+
+def test_supplements_folder_is_not_a_scholarship_source():
+    from scholarmatch.scrapers import manual
+    assert all(s.source != "sc_che" for s in manual.load_all())
+
+
+def test_long_single_token_extracts_quickly():
+    """Listing text is untrusted: a 20,000-character token with no spaces must not make extraction quadratic."""
+    import time
+    for token in ("A" * 20_000, "Ab" * 10_000, "1" * 20_000, "A-" * 10_000):
+        s = sch("long", "Long Token", token)
+        start = time.perf_counter()
+        extract_rules.extract(s)
+        assert time.perf_counter() - start < 0.5, token[:4]

@@ -96,6 +96,10 @@ class Criteria(BaseModel):
     # read for rows without `Scholarship.school` (the Enrollment check covers a school's own portal).
     destination_schools: list[str] = Field(default_factory=list)
     non_resident_required: Optional[bool] = None                # "out-of-state students", "non-residents of Virginia"
+    min_age: Optional[int] = None                               # "at least 60 years of age", "Residents Over 60"
+    # Kind of college the award is limited to ("technical college scholarship", "two-year public or independent
+    # institutions", "community college", "four-year institution"). Only read for rows without `Scholarship.school`.
+    institution_types: list[Literal["two_year", "technical", "four_year"]] = Field(default_factory=list)
     num_awards: Optional[int] = None
     application_method: Literal["direct", "general_application", "automatic", "unknown"] = "unknown"
     requirements: Requirements = Field(default_factory=Requirements)
@@ -140,6 +144,7 @@ class StudentProfile(BaseModel):
     # matched in hard_filter against Criteria.restricted_groups, never sent to an LLM (not in redacted_view).
     affiliations: list[str] = Field(default_factory=list)
     no_special_affiliations: bool = False    # "None of these apply to me": group-limited awards then fail
+    age: Optional[int] = None                # optional (decision D3); local only, never in redacted_view
     # soft facts (sent to agents, after redaction)
     activities: list[str] = Field(default_factory=list)
     interests: list[str] = Field(default_factory=list)

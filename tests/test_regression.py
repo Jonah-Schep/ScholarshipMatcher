@@ -7,7 +7,8 @@ Each line of tests/fixtures/regression_listings.jsonl is a `Scholarship` plus tw
                    that result.
   ineligible_for:  profiles the notes call (almost certainly) ineligible; used by scripts/eval_profiles.py.
 
-Only `extract_rules.extract` + `hard_filter.check` run here: no DB, no LLM.
+Only `supplements.apply` (the hand-typed PDF rules in manual_sources/supplements/, applied at ingest too),
+`extract_rules.extract` and `hard_filter.check` run here: no DB, no LLM.
 
 Cases the code gets wrong today are listed in XFAIL under the work package that fixes them. They are
 strict: when a WP makes one pass, the suite fails until that WP deletes the entry.
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from scholarmatch.ingest import extract_rules
+from scholarmatch.ingest import extract_rules, supplements
 from scholarmatch.matching import hard_filter
 from tests.regression_profiles import PROFILES, load_corpus
 
@@ -27,18 +28,14 @@ XFAIL: dict[str, list[tuple[str, str]]] = {
     # WP3 (awards limited to a specific group): all 12 fixed in rules-3.
     # WP4 (county lists, school systems, high schools, destination college, out-of-state): all 6 fixed in rules-4.
     # WP5 (graduate programs, departments and colleges, declared majors): all 12 fixed in rules-5.
-    "WP6": [  # SC CHE: age, institution type, National Guard, enhancement text, HOPE/LIFE supplement
-        ("Free Tuition for Residents Over 60", "r1p3"),
-        ("Free Tuition for Residents Over 60", "derek"),
-        ("South Carolina Workforce & Industry Needs Scholarship (SC•WINS)", "r1p3"),
-        ("South Carolina Workforce & Industry Needs Scholarship (SC•WINS)", "derek"),
-        # SCNG CAP r1p3 / derek ("Specific group" unknown) fixed by WP3's membership pattern; WP6 adds the fail path.
+    # WP6 (age, kind of college, National Guard, enhancement text): fixed in rules-6.
+    # WP6-supplement: Citizenship is stated only in the program PDFs. These pass once the user types the citizenship
+    # requirement into manual_sources/supplements/sc_che.csv (see manual_sources/README.md); then delete them.
+    "WP6-supplement (needs the user's PDF values)": [
         ("South Carolina HOPE Scholarship (Freshmen)", "r1p3"),
         ("South Carolina Need-based Grant", "r1p3"),
         ("LIFE Scholarship", "r1p3"),
-        ("LIFE Scholarship", "sam"),
         ("Palmetto Fellows Scholarship", "r1p3"),
-        ("Palmetto Fellows Scholarship", "sam"),
     ],
 }
 _XFAIL_BY_CASE = {case: wp for wp, cases in XFAIL.items() for case in cases}
@@ -58,6 +55,7 @@ def _cases():
 
 @pytest.mark.parametrize("s, pid, exp", list(_cases()))
 def test_hard_filter_matches_manual_test_notes(s, pid, exp):
+    s = supplements.apply(s)
     checks = hard_filter.check(s, extract_rules.extract(s), PROFILES[pid])
     got = {c.name: c.result for c in checks}
     worst = max(got.values(), key=SEVERITY.__getitem__, default="pass")

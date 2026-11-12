@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 
 from .. import config, db
-from ..ingest import extract_rules, scam
+from ..ingest import extract_rules, scam, supplements
 from ..models import Scholarship
 from . import academicworks, gsites, manual, pending, state_aid
 from .http import Blocked, PoliteFetcher
@@ -28,9 +28,10 @@ CSV_FIELDS = ["source", "source_id", "name", "url", "school", "region", "geo_sco
 
 
 def ingest(rows: list[Scholarship]) -> dict:
-    """Shared by scrapers and tests: scam screen + rules criteria + upsert. Idempotent."""
+    """Shared by scrapers and tests: hand-typed supplements (manual_sources/supplements/) + scam screen + rules
+    criteria + upsert. Idempotent."""
     seen: dict[str, Scholarship] = {}
-    for r in rows:                       # de-dupe within source on (source, source_id)
+    for r in supplements.apply_all(rows):  # de-dupe within source on (source, source_id)
         seen[r.key] = r
     rows = list(seen.values())
     verdicts = {r.key: scam.screen(r) for r in rows}

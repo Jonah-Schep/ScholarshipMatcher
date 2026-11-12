@@ -93,6 +93,10 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
         out.append(college_check(c.destination_schools, p))
     if c.non_resident_required:
         out.append(non_resident_check(s, c, p))
+    if c.min_age is not None:
+        out.append(age_check(c.min_age, p))
+    if c.institution_types and not s.school:
+        out.append(institution_check(c.institution_types, p))
 
     rising = rising_years(c.evidence.get("class_years", ""))
     if c.levels:
@@ -288,6 +292,68 @@ def non_resident_check(s: Scholarship, c: Criteria, p: StudentProfile) -> HardCh
     return HardCheck(name="Residency", result="fail", detail=f"Only for students from outside {state}; you live in {state}.")
 
 
+# --------------------------------------------------------------------------- age, kind of college (WP6)
+# Below this minimum age a missing age is a normal unknown (most students reach 18-21 during college); from it on, the
+# award is for adult learners, so a missing age is a restrictive unknown, and a high-school senior is assumed too young.
+ADULT_MIN_AGE = 25
+
+
+def age_check(min_age: int, p: StudentProfile) -> HardCheck:
+    """"Age". The detail never repeats the student's age (check details reach the chat agent).
+
+    The one assumption the plan allows (docs/fix_plan.md WP6): with no age given, a high-school senior is taken to be
+    under 25, so an award for people 25 or older fails; the detail says so and how to correct it."""
+    if p.age is not None:
+        if p.age >= min_age:
+            return HardCheck(name="Age", result="pass", detail=f"For people {min_age} or older; your age meets this.")
+        return HardCheck(name="Age", result="fail", detail=f"For people {min_age} or older; you are younger.")
+    if p.level == "hs_senior" and min_age >= ADULT_MIN_AGE:
+        return HardCheck(name="Age", result="fail",
+                         detail=f"For people {min_age} or older. You have not given your age, so as a high school "
+                                f"senior you are assumed to be under {ADULT_MIN_AGE}; add your age on the Profile page "
+                                f"if that is wrong.")
+    return HardCheck(name="Age", result="unknown", weight="restrictive" if min_age >= ADULT_MIN_AGE else "normal",
+                     detail=f"For people {min_age} or older; add your age to confirm.")
+
+
+_INST_LABEL = {"two_year": "two-year colleges", "technical": "technical colleges",
+               "four_year": "four-year colleges and universities"}
+_TECH_NAME = re.compile(r"\btechnical (?:community )?college\b|\btechnical institute\b")
+_TWO_YEAR_NAME = re.compile(r"\bcommunity college\b|\bjunior college\b|\btwo[- ]year\b")
+
+
+def school_kinds(name: str) -> set[str]:
+    """Kinds of college a profile school is: the portals in `config.SCHOOLS` are four-year universities; a name with
+    "Technical College" / "Community College" is two-year. Anything else is not known (empty set)."""
+    n = norm(name).strip()
+    if n in config.SCHOOLS or n in {norm(v[0]) for v in config.SCHOOLS.values()}:
+        return {"four_year"}
+    if _TECH_NAME.search(n):
+        return {"technical", "two_year"}
+    if _TWO_YEAR_NAME.search(n):
+        return {"two_year"}
+    return set()
+
+
+def institution_check(kinds: list[str], p: StudentProfile) -> HardCheck:
+    """"Type of college": pass when a school on the profile is of a listed kind; fail when every school on the profile
+    is known and none is; unknown when the profile names no school or a school whose kind is not known."""
+    shown = " or ".join(_INST_LABEL[k] for k in kinds)
+    schools = [x for x in [p.current_school, *p.intended_schools] if x and x.strip()]
+    if not schools:
+        return HardCheck(name="Type of college", result="unknown",
+                         detail=f"Only for students at {shown}; add the colleges you attend or are applying to.")
+    found = [school_kinds(x) for x in schools]
+    if any(k & set(kinds) for k in found):
+        return HardCheck(name="Type of college", result="pass",
+                         detail=f"Only for students at {shown}; a college on your list is one.")
+    if all(found):
+        return HardCheck(name="Type of college", result="fail",
+                         detail=f"Only for students at {shown}; none of the colleges on your list is one.")
+    return HardCheck(name="Type of college", result="unknown",
+                     detail=f"Only for students at {shown}; check whether the college you attend counts.")
+
+
 # Words that say what KIND of group it is, not WHICH one: they never count as an overlap on their own
 # (so "my mom is a Virginia Tech employee" does not match "children of tobacco growers in Southside Virginia").
 _GROUP_STOP = set(
@@ -306,6 +372,9 @@ def _group_tokens(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9][a-z0-9'-]*[a-z0-9]", norm(text)) if w not in _GROUP_STOP}
 
 
+_NATIONAL_GUARD = re.compile(r"\bnational guard\b", re.I)
+
+
 def group_check(groups: list[str], p: StudentProfile) -> HardCheck:
     """"Specific group": pass when an affiliation shares a distinctive word with a group phrase; fail only when the
     student ticked "none of these apply to me"; otherwise a restrictive unknown (decision D1 in docs/fix_plan.md).
@@ -318,6 +387,9 @@ def group_check(groups: list[str], p: StudentProfile) -> HardCheck:
     if p.no_special_affiliations:
         return HardCheck(name="Specific group", result="fail",
                          detail=f"Only for a specific group: “{shown}”. You said no special group applies to you.")
+    if p.military_affiliation is False and any(_NATIONAL_GUARD.search(g) for g in groups):
+        return HardCheck(name="Specific group", result="fail",
+                         detail=f"Only for a specific group: “{shown}”. You said you have no military tie.")
     return HardCheck(name="Specific group", result="unknown", weight="restrictive",
                      detail=f"Only for a specific group: “{shown}”. Add this under Affiliations if it applies to you.")
 

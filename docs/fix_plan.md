@@ -16,7 +16,7 @@ ends in one branch and one pull request.
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | done (2026-11-12) | `fix/still-to-fix` | `rules-3`, `rubric-4`; all 12 WP3 xfails fixed, plus 2 SCNG CAP (WP6) ones; Profile form not checked in the running app; see "WP3 notes" |
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | done (2026-11-12) | `fix/still-to-fix` | `rules-4`, `rubric-5`; all 6 WP4 xfails fixed; Locality check semantics changed (see "WP4 notes"); remaining xfails WP5 12, WP6 10 |
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | done (2026-11-12) | `fix/still-to-fix` | `rules-5` (no rubric change); all 12 WP5 xfails fixed; Garris `expect` unknown → pass; WP4/WP0 carry-overs done; remaining xfails WP6 10; see "WP5 notes" |
-| WP6 SC CHE programs | 5 | WP5 | todo | | |
+| WP6 SC CHE programs | 5 | WP5 | done except supplement values (2026-11-12) | `fix/still-to-fix` | `rules-6` (no rubric change); 6 of 10 WP6 xfails fixed; 4 "WP6-supplement" xfails wait on the user typing citizenship from the PDFs into `manual_sources/supplements/sc_che.csv`; `extract` no longer quadratic; Age field not checked in the running app; see "WP6 notes" |
 | WP7 Extractor agent learns the new fields | LLM parity | WP6 | todo | | |
 | WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | todo | | needs network + the user |
 
@@ -667,14 +667,136 @@ Files: core rule files, `scrapers/state_aid.py` or `manual_sources/` (HOPE/LIFE 
   entry (WP3 machinery) in addition to the military flag. `p.military_affiliation is False` → `fail`.
 - **Enhancement text:** sentences containing "enhancement" or "additional $… for … majors" are removed from
   the major-restriction pass. LIFE and Palmetto Fellows must have `majors == []`.
-- **HOPE / LIFE / Palmetto Fellows / Need-based Grant rules (D2):** add `manual_sources/sc_che_rules.csv`
-  (or extend the existing manual format) with the GPA, citizenship and FAFSA requirements typed from the
+- **HOPE / LIFE / Palmetto Fellows / Need-based Grant rules (D2):** add `manual_sources/supplements/sc_che.csv`
+  (changed in WP6 from `manual_sources/sc_che_rules.csv`: every `*.csv` directly in `manual_sources/` is loaded as
+  a scholarship source) with the GPA, citizenship and FAFSA requirements typed from the
   official PDFs, each with the PDF URL as its source. Ingest merges this text into the SC CHE row's
   `eligibility` so the normal extraction and grounding work. Mark `confidence="medium"`. Ask the user to
   check the typed values against the PDFs before merging.
 
 Tests: all nine SC CHE rows against round 1 profile 3 and Derek; an SC resident with GPA 3.2 and citizenship
 keeps LIFE and HOPE; a 62-year-old SC resident passes Free Tuition; a technical-college student keeps SC WINS.
+
+### WP6 notes (2026-11-12)
+
+- **Code.** `models.Criteria.min_age` / `institution_types`; `models.StudentProfile.age` (not in `redacted_view()`).
+  `extract_rules`: `min_age`, `institution_types`, `_ENHANCEMENT`, two National Guard alternatives in
+  `GROUP_PATTERNS["membership"]`. `hard_filter`: `age_check` ("Age", `ADULT_MIN_AGE = 25`), `school_kinds` +
+  `institution_check` ("Type of college"), National Guard fail path in `group_check`. New `ingest/supplements.py`
+  (`apply`, `apply_all`, `load`), called first in `scrapers/runner.ingest` (so `load_sample.py`, the scrapers and
+  `eval_profiles.py --corpus` all merge it). `workers._RULE_ONLY_FIELDS` + `to_criteria` carry `min_age` and
+  `institution_types` with their evidence (the carry-over condition now treats only `None` / `False` / `[]` as unset).
+  `app.page_profile`: optional "Age (0 = skip)" number in the optional-details expander. `RULES_VERSION = "rules-6"`.
+  No rubric number changed (`min_age` / `institution_types` were already in `rubric.HARD_CRITERIA_FIELDS`; `narrowing`
+  is unchanged), so `RUBRIC_VERSION` stays `rubric-5`. No prompt change, nothing added to `Supervisor._HARD_FIELDS`.
+- **Age.** Hard sentences and the listing name: "at least N years old/of age", "age(d) N or older", "N years (of age)
+  or older", "minimum age of/is N", "over the age of N", "<person word> (who are) over N" ("Residents Over 60"); a bare
+  "over 50" is not read ("for over 50 years", "over 20 scholarships"). Ages 16-99; negated sentences skipped. Check:
+  age given → pass/fail (the detail never states the student's age); no age + `hs_senior` + `min_age >= 25` → fail,
+  detail "You have not given your age, so as a high school senior you are assumed to be under 25; add your age on the
+  Profile page if that is wrong." **Deviation:** with no age otherwise, the unknown is restrictive only for
+  `min_age >= 25` (adult-learner awards); for "at least 18 years old" it is a normal unknown, because most students reach
+  that age during college and a restrictive unknown would cut the chance of many ordinary awards to a quarter.
+- **Kind of college.** `technical` ("technical (community) college(s)", "technical college system"), `two_year`
+  ("two-year public/private/independent … institutions/colleges/schools", "community college", "junior college";
+  proper names count, so "enrolling at Central Piedmont Community College" is two-year), `four_year` ("four-year
+  institution/college/university"; not in the plan's pattern list, but in the plan's Literal: HOPE and Palmetto
+  Fellows state it). Skipped: school-portal rows (`s.school`), negated and preference sentences, sentences naming both
+  ("two-year or four-year program", SCNG CAP), transfer/past wording ("transfer", "associate degree", "graduates of",
+  "after completing"); a listing naming four-year in one sentence and two-year in another gets no limit. Check: each
+  profile school (current + intended) is classified: `config.SCHOOLS` codes/names → four-year, "… Technical College /
+  Technical Institute" → technical + two-year, "… Community/Junior College" → two-year, anything else not known. Pass
+  if any school fits; fail if every school is classified and none fits; unknown otherwise (no school, or an
+  unclassified one). Lottery Tuition Assistance gets `[two_year, technical]` ("two-year public or independent
+  institutions", "Technical Colleges (All)"), SC WINS `[technical]`, HOPE and Palmetto `[four_year]`. Lottery is not
+  named in the plan's WP6 text but is in item 5. **UI gap:** the Profile form only offers VT / USC / ECU as colleges, so
+  a technical-college student can only get `unknown` there (never a wrong fail); a free-text "other college" field
+  would let them pass. Not added (not in the plan).
+- **National Guard.** "Army/Air National Guard members/soldiers/airmen/personnel", "serving/enlisted in the … National
+  Guard" (plus the WP3 "members of the South Carolina Army and Air National Guard"). `group_check`: an Affiliations
+  overlap still passes first; then "None of these apply" → fail; then `military_affiliation is False` and a National
+  Guard group → fail ("You said you have no military tie."); `True` stays a restrictive unknown (a veteran's child is
+  not a Guard member). The existing "Military" check also fails for `False`, as before.
+- **Enhancement text.** Hard sentences matching "enhancement(s)" or "additional $N … majors" are skipped in the majors
+  pass and in `declared_major`. LIFE and Palmetto Fellows now have `majors == []` (were `[accounting, education]` and
+  `[mathematics]`). A before/after diff of `extract` over the corpus and the local catalog changed nothing else (the new
+  fields aside).
+- **Supplement (D2).** `manual_sources/supplements/sc_che.csv` (the plan said `manual_sources/sc_che_rules.csv`, but
+  every `*.csv` directly in `manual_sources/` is loaded as a scholarship source; the subfolder is not), columns
+  `source_id, requirement, source_url`. `apply` appends each usable row's text to `eligibility` (newline-separated,
+  skipped if already present: idempotent, so a re-ingested export is unchanged), adds the URL to `sources`, stores the
+  rows in `extra["supplement"]` and sets `confidence="medium"` (a `low` row stays `low`). Ignored: `requirement`
+  starting with TODO/TBD/FIXME, `source_id` starting with `#`, no http(s) URL. Documented in `manual_sources/README.md`
+  (including: do not type a GPA sentence when the PDF lets students qualify by GPA *or* SAT *or* rank; the rules read
+  any GPA number as a hard minimum). **No requirement text was typed in this session** (no network; the scraped text
+  states no citizenship or GPA rule for these four programs; nothing was taken from memory). The shipped file has 7
+  placeholder rows, each with the program's own "Regulations" PDF URL from `extra.documents`:
+  - `life-scholarship`: citizenship; initial GPA / SAT-ACT / class rank (LIFE Scholarship Regulations June 2025).
+  - `palmetto-fellows-scholarship`: citizenship; initial GPA / SAT-ACT / class rank (Palmetto Fellow Scholarship
+    Regulations May 2026).
+  - `south-carolina-hope-scholarship-freshmen`: citizenship; GPA (SC HOPE Scholarship Regulations).
+  - `south-carolina-need-based-grant`: citizenship (SC Need-based Grant Regulations).
+
+  What the scraped text already states needs no supplement and is read by the rules: Lottery Tuition Assistance
+  (FAFSA, "U.S. citizen or a permanent resident", SC residency, two-year/technical), Need-based Grant (FAFSA, financial
+  need), residency for all nine (the SC CHE source default). The plan's "ask the user to check the typed values against
+  the PDFs before merging" is in the README.
+- **xfails.** Fixed and removed (6): Free Tuition r1p3 (Age fail) and derek (Age unknown), SC WINS r1p3 and derek (Type
+  of college fail), LIFE sam and Palmetto Fellows sam (pass). **Remaining (4), relabelled "WP6-supplement (needs the
+  user's PDF values)", strict:** HOPE r1p3, Need-based Grant r1p3, LIFE r1p3, Palmetto Fellows r1p3. Each expects
+  `Citizenship = fail` for round 1 profile 3 (not a U.S. citizen); each needs that program's citizenship requirement
+  typed into the supplement (a sentence containing "U.S. citizen", "United States citizen", "permanent resident" or
+  "citizenship"). `test_regression.py` now runs `supplements.apply` on every corpus row, so filling the file turns them
+  into XPASS; then delete the entries. No `expect` value was changed.
+- **Carry-over: quadratic `extract`.** Three causes, all fixed without changing any extraction result: (1) `_PLACE_WORD`
+  (locality / destination-college patterns) could start a match at every capital letter inside a long token and then
+  scan the rest of it: it now starts only at the start of a word (`(?<![\w'’])`) and is possessive (`[\w'’]*+`). (2)
+  The essay pattern `\d+[- ]word` did the same on digit runs: now `(?<!\d)\d++`. (3) `localities` and
+  `graduate_program` searched the whole sentence head before every candidate: now only the last 300 characters
+  (`_LOC_WINDOW`; "start of sentence" only counts when the head was not cut), the `_LOC_CHAIN` "or/and" join only looks
+  at places within 40 characters, and `_PRE_PREFIX` reads the last 8 characters. 20,000-character tokens (`A…`, `Ab…`,
+  `1…`, `A-…`) now take under 0.1 s (`test_long_single_token_extracts_quickly`, limit 0.5 s); a 20,000-character
+  sentence of repeated "Ab County" went from 2.7 s to 0.15 s.
+- **Tests.** `test_units.py` (14 new): age positives (6 + the listing name) and negatives (preference, "for over 50
+  years", "over 20 scholarships", negated, counts), the Age check matrix (no age in the detail, the stated assumption,
+  restrictive only from 25), institution-type positives / negatives (both kinds, transfer, associate degree,
+  preference, negated, school portal), the Type of college check, enhancement text on the real LIFE / Palmetto rows,
+  the plan's eligible-student cases (SC resident with GPA 3.2 + citizenship keeps LIFE, HOPE and Palmetto; a
+  62-year-old passes Free Tuition; a Midlands Technical College student keeps SC WINS and Lottery; a USC student fails
+  Lottery), National Guard pattern and fail path, `to_criteria` carry-over, the supplement merge (made-up text in a
+  temp file: merged, placeholder / unsourced / commented rows ignored, `medium`, idempotent, grounded Citizenship
+  evidence), every shipped supplement row points at its program's own PDF and merges no TODO text, the supplements
+  folder is not a scholarship source, the 20,000-character token. `test_pipeline.py`: `test_no_pii_reaches_agents`
+  sets `age = 73` and asserts neither `"age"` nor `73` reaches a prompt and `age` is not in `redacted_view()`.
+  Suite: 207 collected = 203 pass + 4 strict xfail.
+- **Eval (as of 2026-11-12, rule-based), rules-5 → rules-6.** Regression corpus (`--corpus`):
+  ```
+  profile  eligible matches known_inel inel_top10 elig_lost      (before: eligible / known_inel / inel_top10 / elig_lost)
+  r1p1            4       4          0          0         0
+  r1p2           12      12          3          3         0
+  r1p3            5       5          3          3         0      (5 / 5 / 5 / 0)
+  r1p4           21      21          0          0         0
+  maya            6       6          1          1         0
+  derek           4       4          2          2         0      (4 / 3 / 3 / 0)
+  aisha          19      19         11          3         0
+  sam             5       5          0          0         0      (6 / 0 / 0 / 2)
+  total          76      76         20         12         0      (77 / 23 / 15 / 2)
+  ```
+  Local catalog: 155 / 104 / 41 / 17 / 2 → **154 / 103 / 38 / 14 / 0** (r1p3 5/5/3/3/0, was 5/5/5/5/0; derek 3/3/2/2/0,
+  was 3/3/3/3/0; sam 5/5/0/0/0, was 6/6/0/0/2; other profiles unchanged). `elig_lost` is 0 everywhere. `sam` regains
+  LIFE and Palmetto Fellows and loses Free Tuition (Age), SC WINS and Lottery (Type of college), all correct. r1p3 loses
+  Free Tuition and SC WINS but now shows LIFE and Palmetto Fellows (no longer excluded by the major text); she is not a
+  citizen, so these wait on the supplement (the corpus does not list them in her `ineligible_for`, so they are not
+  counted). Derek's list still shows Free Tuition (restrictive Age unknown, chance x0.25) and SCNG CAP (restrictive
+  group unknown): his profile gives neither age nor military status.
+- **Found, not fixed (outside item 5's list).** The LIFE row reads `levels = ["hs_senior"]` only (from the "High School
+  Early Graduation" paragraph), so a current college student (Derek) fails Education level on LIFE although LIFE is
+  renewed in college; HOPE is freshmen-only, so its hs_senior level is right. WP8 (or a later fix) should decide
+  whether LIFE needs `undergrad` too; the corpus has no expectation for it.
+- **For WP7.** Add `min_age` and `institution_types` to `ExtractedCriteria` / `EXTRACTOR_SYSTEM` (the plan lists
+  them); until then they come from the rules only. Supplement text is part of `eligibility`, so the agents and the
+  grounding gate already see it. The Profile form's Age field was **not checked in the running app** (`app.py`
+  parses); check it in WP8.
 
 ## WP7 — Extractor agent learns the new fields
 
