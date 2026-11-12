@@ -116,12 +116,16 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 162 collected = 120 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0 and WP1 done.
+  audit). Tests: 169 collected = 127 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0, WP1 and WP2 done.
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
   "Varies", and the result gets a "No award amount is listed" flag (`rubric-2`). It is not excluded.
+- Eligibility certainty (`rubric-3`): `rubric.info_level` is `none` (title only / under 40 characters of text →
+  capped at 30%), `thin` (no hard criterion in `rubric.HARD_CRITERIA_FIELDS` → capped at 60%) or `ok` (the ratio).
+  `Enrollment` is not counted. `HardCheck.weight="restrictive"` unknowns count 0 and multiply the chance by 0.25.
+  New hard `Criteria` fields go in `HARD_CRITERIA_FIELDS` (the WP3–WP6 names are already listed).
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -140,8 +144,8 @@ False positives still dominate the results. Highest impact first:
    dependents, club/association members (USATT), community-college transfers. These pass with "Eligibility
    certainty 100%" and make up most of the VT list. They need a rule (likely fail, or at least unknown + Verify)
    in `extract_rules.py` and `hard_filter.check`.
-2. **Missing information scores as certain.** A listing with no stated requirements (or title only) gets 100%
-   certainty in `rubric.py`. Missing text should lower certainty, not raise it.
+2. *(Fixed in WP2: title-only rows are capped at 30% certainty and rows with no stated requirement at 60%, so they
+   rank below rows with confirmed requirements; `rubric-3`.)*
 3. **Locality and school limits are missed:** "students from Northampton or Accomack counties", "graduated
    from the Chesapeake Public School system", "senior at West Charlotte High School enrolling at Central Piedmont
    Community College". These need patterns for the county list, the school system/high school, and the destination college.

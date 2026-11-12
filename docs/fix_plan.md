@@ -12,7 +12,7 @@ ends in one branch and one pull request.
 |---|---|---|---|---|---|
 | WP0 Regression corpus + eval script | groundwork | none | done (2026-11-12) | `fix/still-to-fix` | 42 strict xfails (WP3 12, WP4 6, WP5 12, WP6 12); see "WP0 notes" |
 | WP1 UI and launch config | 9, 11 | none | done (2026-11-12) | `fix/still-to-fix` | `rubric-2` (zero-amount flag); header not checked in the running app; see "WP1 notes" |
-| WP2 Certainty when information is missing | 2 | WP0 | todo | | |
+| WP2 Certainty when information is missing | 2 | WP0 | done (2026-11-12) | `fix/still-to-fix` | `rubric-3`; `HardCheck.weight` + x0.25 chance factor ready for WP3; see "WP2 notes" |
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | todo | | |
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | todo | | |
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | todo | | |
@@ -262,6 +262,53 @@ Files: `matching/rubric.py`, `config.py` (`RUBRIC_VERSION` → `rubric-3`; WP1 a
 
 Tests: title-only row is not 100%; `thin` row is ≤ 60%; a row with real passes is unchanged; the sort
 order of the existing pipeline tests still holds (adjust expected numbers only where the rubric change explains it).
+
+### WP2 notes (2026-11-12)
+
+- **Code.** All in `matching/rubric.py`: `HARD_CRITERIA_FIELDS` (one module-level tuple; it already lists the WP3–WP6
+  fields `restricted_groups`, `destination_schools`, `non_resident_required`, `declared_major_required`, `min_age`,
+  `institution_types`, read with `getattr(c, f, None)` so they are skipped until they exist; **WP3–WP6 do not need to
+  touch it** unless they add a field with another name), `listing_body`, `has_hard_criteria`, `info_level`,
+  `eligibility_certainty` (returns certainty, level and the "why" text), constants `CERTAINTY_CAP` (none 0.30, thin
+  0.60), `NO_CHECKS_CERTAINTY` (0.8, unchanged), `SOURCE_CHECKS = {"Enrollment"}`, `RESTRICTIVE_CHANCE_FACTOR` (0.25).
+  `models.HardCheck.weight: Literal["normal", "restrictive"] = "normal"`. `config.RUBRIC_VERSION = "rubric-3"`.
+- **Rules as built.** `info_level`: `none` when `extra.detail_fetched is False` or the listing text other than the
+  name (`full_text()` minus the leading name) is under 40 characters; `thin` when no `HARD_CRITERIA_FIELDS` value is
+  set (`class_years` and `us_citizen_or_resident_required` count as hard criteria too; the plan's list did not name
+  them); `ok` otherwise. Certainty = (passes + 0.5 × normal unknowns + 0 × restrictive unknowns) / checks, with
+  `Enrollment` left out of both counts; 0.8 when no counted check remains; then capped by level. A `thin` row has no
+  counted checks by construction (every check except Enrollment comes from a hard field), so it always shows 60%.
+- **WP3 only has to set `weight="restrictive"`** on the "Specific group" unknown: the 0-count, the x0.25 chance factor
+  (applied after the normal chance formula, also to automatic state programs) and a "why" sentence ("N of these limit
+  the award to a specific group…") are in place and unit-tested with hand-built `HardCheck`s.
+- **Side effect on `ok` rows with Enrollment.** Leaving Enrollment out of the ratio lowers certainty where a school row
+  also has an unknown (Enrollment pass + Field unknown: 75% → 50%), and leaves all-pass rows at 100%. No existing test
+  asserted a certainty or score number, so **no expected value in the existing tests changed**.
+- **Tests.** `test_units.py`: title-only row 30% (was 100%) with the "no eligibility details" why; short text → `none`;
+  thin row 60% with and without Enrollment; a row with real passes keeps 100% / 75%; restrictive unknown → 50% vs
+  75%, chance x0.25; `info_level` with a stand-in object that has `restricted_groups`; title-only row ranks below a
+  row with two confirmed requirements on match and chance. `test_pipeline.py`: an offline run puts an ingested
+  title-only VT row below `test:svc` and `vt1`, at 30%.
+- **Eval (rules-2, rule-based, as of 2026-11-12).** Local catalog, rubric-2 → rubric-3:
+  ```
+  profile  eligible matches known_inel inel_top10 elig_lost      (before: known_inel / inel_top10)
+  r1p1            0       0          0          0         0
+  r1p2           47      30         27          8         0      (28 / 9)
+  r1p3            5       5          5          5         0
+  r1p4           49      30          2          2         0
+  maya            0       0          0          0         0
+  derek           3       3          3          3         0
+  aisha          49      30          6          0         0
+  sam             6       6          0          0         2
+  total         159     104         43         18         2      (44 / 19)
+  ```
+  Regression corpus (`--corpus`): **unchanged** (total 95 / 95 / 32 / 23 / 2), as expected: every corpus row has
+  detail text and hard criteria, so it is `ok`, and WP2 changes no check result.
+- **Why the local numbers barely move.** 49 of the 50 local VT rows are title-only, so they all drop to 30% *together*
+  and still tie among themselves (alphabetical tie-break). They now rank below every row that has real text (that is
+  the item-2 fix), but for a VT student nearly all eligible rows are VT title-only rows, so the top ten is still made
+  of them. Only re-scraping VT detail pages (WP8) lets the rules tell them apart. One known-ineligible award (Dunham
+  Charitable Scholarship Fund) fell out of r1p2's top ten and one fell below the 30-item cap.
 
 ## WP3 — Awards limited to a specific group (item 1)
 

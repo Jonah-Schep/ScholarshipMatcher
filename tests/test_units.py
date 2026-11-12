@@ -167,3 +167,103 @@ def test_rule_majors_keep_the_specific_field():
     cns = sch("cns", "CNS Award", "The scholarship is intended for students enrolled in the Clinical Nurse "
               "Specialists programs within the College of Nursing.")
     assert extract_rules.field_match(extract_rules.extract(cns).majors, ["Nursing"]) == "unknown"
+
+
+# ----------------------------------------------------------------------------- WP2: certainty when info is missing
+def _rubric_bits():
+    from scholarmatch.matching import rubric
+    from scholarmatch.models import Criteria, HardCheck, ScoreJudgement, StudentProfile
+    j = ScoreJudgement(fit="moderate", fit_evidence=[], essay_reuse="not_applicable", reusable_essay_title="",
+                       strengths=[], gaps=[], summary="Eligibility-based award.")
+    p = StudentProfile(profile_id="u", state="VA", level="undergrad", current_school="vt", gpa=3.5,
+                       majors=["Nursing"])
+    return rubric, Criteria, HardCheck, j, p
+
+
+def _certainty(r):
+    return next(line for line in r.rubric if line.dimension == "Eligibility certainty")
+
+
+def test_title_only_row_is_not_certain():
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    s = sch("t", "Smith Family Endowed Scholarship", "", source="academicworks_vt", school="vt", geo_scope="va",
+            extra={"detail_fetched": False})
+    c = extract_rules.extract(s)
+    assert rubric.info_level(s, c) == "none"
+    checks = [HardCheck(name="Enrollment", result="pass", detail="You attend Virginia Tech.")]
+    line = _certainty(rubric.build_result(s, c, p, checks, j, "heuristic"))
+    assert line.rating == "30%" and line.points == 7.5            # was 100% (Enrollment 1 of 1) before rubric-3
+    assert "no eligibility details" in line.why
+    # a few words of text with no detail_fetched flag is also "none"
+    short = sch("t2", "Smith Fund", "Supports students.")
+    assert rubric.info_level(short, extract_rules.extract(short)) == "none"
+
+
+def test_thin_row_is_capped_at_sixty_percent():
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    s = sch("t", "Generous Donor Scholarship", "This fund was established in 1987 by a grateful alumnus to "
+            "honor his parents, who believed deeply in the value of an education.")
+    c = extract_rules.extract(s)
+    assert rubric.info_level(s, c) == "thin"
+    line = _certainty(rubric.build_result(s, c, p, [], j, "heuristic"))
+    assert line.rating == "60%" and "no specific eligibility requirements" in line.why
+    # Enrollment is a property of the source, so it does not lift a thin listing either
+    vt = s.model_copy(update={"source": "academicworks_vt", "school": "vt"})
+    enr = [HardCheck(name="Enrollment", result="pass", detail="You attend Virginia Tech.")]
+    assert _certainty(rubric.build_result(vt, c, p, enr, j, "heuristic")).rating == "60%"
+
+
+def test_row_with_real_requirements_keeps_the_ratio():
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    s = sch("t", "Nursing Merit Scholarship", "Open to undergraduate nursing majors with a minimum GPA of 3.0.")
+    c = extract_rules.extract(s)
+    assert rubric.info_level(s, c) == "ok"
+    passes = [HardCheck(name="GPA", result="pass", detail="ok"), HardCheck(name="Field of study", result="pass", detail="ok")]
+    assert _certainty(rubric.build_result(s, c, p, passes, j, "heuristic")).rating == "100%"
+    mixed = [HardCheck(name="Enrollment", result="pass", detail="ok"), HardCheck(name="GPA", result="pass", detail="ok"),
+             HardCheck(name="Field of study", result="unknown", detail="check")]
+    assert _certainty(rubric.build_result(s, c, p, mixed, j, "heuristic")).rating == "75%"   # Enrollment not counted
+
+
+def test_restrictive_unknown_counts_zero_and_cuts_chance():
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    s = sch("t", "Nursing Merit Scholarship", "Open to undergraduate nursing majors with a minimum GPA of 3.0.")
+    c = extract_rules.extract(s)
+    assert HardCheck(name="x", result="unknown", detail="").weight == "normal"
+    normal = [HardCheck(name="GPA", result="pass", detail="ok"),
+              HardCheck(name="Specific group", result="unknown", detail="Only for members.")]
+    restrictive = [normal[0], normal[1].model_copy(update={"weight": "restrictive"})]
+    a = rubric.build_result(s, c, p, normal, j, "heuristic")
+    b = rubric.build_result(s, c, p, restrictive, j, "heuristic")
+    assert _certainty(a).rating == "75%" and _certainty(b).rating == "50%"
+    assert "specific group" in _certainty(b).why
+    # chance: certainty effect (0.75 vs 0.875) times the 0.25 restrictive factor
+    expected = a.win_probability * (0.5 + 0.5 * 0.5) / (0.5 + 0.5 * 0.75) * rubric.RESTRICTIVE_CHANCE_FACTOR
+    assert abs(b.win_probability - max(0.005, expected)) <= 0.002
+    assert b.match_score < a.match_score
+    assert any(f.startswith("Verify — Specific group") for f in b.flags)
+
+
+def test_info_level_tolerates_fields_added_by_later_work_packages():
+    from types import SimpleNamespace
+    from scholarmatch.matching import rubric
+    s = sch("t", "Employee Family Scholarship", "For the children of employees of Example Manufacturing Company.")
+    assert "restricted_groups" in rubric.HARD_CRITERIA_FIELDS
+    assert rubric.info_level(s, SimpleNamespace(restricted_groups=["children of employees"])) == "ok"
+    assert rubric.info_level(s, SimpleNamespace()) == "thin"
+
+
+def test_title_only_row_ranks_below_confirmed_requirements():
+    rubric, Criteria, HardCheck, j, p = _rubric_bits()
+    title = sch("a", "Smith Family Endowed Scholarship", "", source="academicworks_vt", school="vt", geo_scope="va",
+                extra={"detail_fetched": False})
+    real = sch("b", "Nursing Merit Scholarship", "Open to nursing majors with a minimum GPA of 3.0.",
+               source="academicworks_vt", school="vt", geo_scope="va")
+    enr = HardCheck(name="Enrollment", result="pass", detail="ok")
+    r_title = rubric.build_result(title, extract_rules.extract(title), p, [enr], j, "heuristic")
+    r_real = rubric.build_result(real, extract_rules.extract(real), p,
+                                 [enr, HardCheck(name="GPA", result="pass", detail="ok"),
+                                  HardCheck(name="Field of study", result="pass", detail="ok")], j, "heuristic")
+    assert r_real.match_score > r_title.match_score and r_real.win_probability > r_title.win_probability
+    for order in ("Best overall match", "Highest chance of winning"):
+        assert rubric.sort_results([r_title, r_real], order)[0].scholarship_key == r_real.scholarship_key

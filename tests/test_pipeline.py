@@ -176,3 +176,18 @@ def test_chat_persists_and_works_offline(catalog, profile):
     out = ChatAgent(OfflineLLM(), profile, run).ask("test:svc", "How hard is this?")
     assert "Competition" in out
     assert [t["role"] for t in db.chat_history("t1", "test:svc")] == ["user", "assistant"]
+
+
+def test_title_only_rows_fall_in_the_pre_rank(catalog, profile):
+    from scholarmatch.scrapers.runner import ingest
+    from tests.conftest import sch
+    ingest([sch("vt_title", "Smith Family Endowed Scholarship", "", source="academicworks_vt", school="vt",
+                geo_scope="va", amount_raw="Varies", amount_min=None, amount_max=None,
+                extra={"detail_fetched": False})])
+    run = Supervisor(OfflineLLM()).run(profile, AS_OF)
+    title = get(run, "academicworks_vt:vt_title")
+    cert = next(line for line in title.rubric if line.dimension == "Eligibility certainty")
+    assert cert.rating == "30%" and "no eligibility details" in cert.why
+    assert any("Only the listing title" in f for f in title.flags)
+    assert keys(run).index("academicworks_vt:vt_title") > keys(run).index("test:svc")
+    assert keys(run).index("academicworks_vt:vt_title") > keys(run).index("academicworks_vt:vt1")

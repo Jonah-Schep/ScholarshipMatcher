@@ -81,7 +81,68 @@ def effort_hours(c: Criteria, essay_reuse: str) -> tuple[float, list[str]]:
     return round(hours, 2), parts
 
 
-ZERO_AMOUNT_FLAG = "No award amount is listed; this may be program support rather than a student scholarship."
+# Criteria fields that restrict who may apply. An empty/None/False value means "not stated". Later work packages
+# add their fields here; fields that do not exist on `Criteria` yet are skipped (see `has_hard_criteria`).
+HARD_CRITERIA_FIELDS = (
+    "min_gpa", "residency_states", "localities", "levels", "class_years", "majors", "need_based", "pell_required",
+    "gender", "ethnicities", "disability_required", "first_generation_required", "military_affiliation_required",
+    "us_citizen_or_resident_required",
+    # WP3-WP6
+    "restricted_groups", "destination_schools", "non_resident_required", "declared_major_required", "min_age",
+    "institution_types",
+)
+MIN_LISTING_CHARS = 40                       # listing text (other than the name) shorter than this = no details
+CERTAINTY_CAP = {"none": 0.30, "thin": 0.60}
+NO_CHECKS_CERTAINTY = 0.8                    # criteria were extracted but none applies to this student
+RESTRICTIVE_CHANCE_FACTOR = 0.25             # any restrictive unknown multiplies the estimated chance by this
+SOURCE_CHECKS = {"Enrollment"}               # properties of the source, not of the listing: not in the ratio
+
+
+def listing_body(s: Scholarship) -> str:
+    """The listing text other than the award name."""
+    full = s.full_text()
+    return full[len(s.name):].strip() if s.name and full.startswith(s.name) else full
+
+
+def has_hard_criteria(c: Criteria) -> bool:
+    return any(getattr(c, f, None) not in (None, False, [], "", 0) for f in HARD_CRITERIA_FIELDS)
+
+
+def info_level(s: Scholarship, c: Criteria) -> str:
+    """How much the listing says about eligibility: "none" (title only / almost no text), "thin" (text, but no
+    hard criterion could be read from it) or "ok"."""
+    if s.extra.get("detail_fetched") is False or len(listing_body(s)) < MIN_LISTING_CHARS:
+        return "none"
+    return "ok" if has_hard_criteria(c) else "thin"
+
+
+def eligibility_certainty(s: Scholarship, c: Criteria, checks: list[HardCheck]) -> tuple[float, str, str]:
+    """(certainty 0-1, info level, plain-language why). Missing information lowers certainty, never raises it."""
+    level = info_level(s, c)
+    counted = [ch for ch in checks if ch.name not in SOURCE_CHECKS]
+    n = len(counted)
+    passed = sum(ch.result == "pass" for ch in counted)
+    unknown = [ch for ch in counted if ch.result == "unknown"]
+    normal_unknown = sum(ch.weight == "normal" for ch in unknown)
+    certainty = NO_CHECKS_CERTAINTY if n == 0 else (passed + 0.5 * normal_unknown) / n
+    if level in CERTAINTY_CAP:
+        certainty = min(certainty, CERTAINTY_CAP[level])
+    if level == "none":
+        why = "The listing gives no eligibility details; open the link to check who can apply."
+    elif level == "thin":
+        why = "The listing states no specific eligibility requirements; open the link to confirm who can apply."
+    elif n == 0:
+        why = "No eligibility requirement in the listing applies to your profile."
+    else:
+        why = f"{passed} of {n} stated requirements confirmed" + (
+            f"; {len(unknown)} need your confirmation." if unknown else ".")
+        restrictive = len(unknown) - normal_unknown
+        if restrictive:
+            why += f" {restrictive} of these limit the award to a specific group, so they count as unconfirmed."
+    return certainty, level, why
+
+
+ZERO_AMOUNT_FLAG ="No award amount is listed; this may be program support rather than a student scholarship."
 
 
 def amount_value(s: Scholarship) -> Optional[float]:
@@ -144,12 +205,8 @@ def build_result(s: Scholarship, c: Criteria, p: StudentProfile, checks: list[Ha
     flags = list(extra_flags or [])
 
     # 1. Eligibility certainty (25)
-    n = len(checks)
-    passed = sum(ch.result == "pass" for ch in checks)
     unknown = [ch for ch in checks if ch.result == "unknown"]
-    certainty = 0.8 if n == 0 else (passed + 0.5 * len(unknown)) / n
-    why = ("No eligibility restrictions were found in the listing." if n == 0 else
-           f"{passed} of {n} stated requirements confirmed" + (f"; {len(unknown)} need your confirmation." if unknown else "."))
+    certainty, _, why = eligibility_certainty(s, c, checks)
     lines.append(RubricLine(dimension="Eligibility certainty", rating=f"{certainty:.0%}", points=round(25 * certainty, 1), max_points=25, why=why))
     flags += [f"Verify — {ch.name}: {ch.detail}" for ch in unknown]
 
@@ -185,6 +242,8 @@ def build_result(s: Scholarship, c: Criteria, p: StudentProfile, checks: list[Ha
         prob = base * min(2.0, 1.25 ** len(narrow))
         prob *= 1 + min(2.0, math.log10(c.num_awards)) if c.num_awards and c.num_awards > 1 else 1
         prob *= FIT_ODDS[j.fit] * (0.5 + 0.5 * certainty)
+    if any(ch.weight == "restrictive" for ch in unknown):
+        prob *= RESTRICTIVE_CHANCE_FACTOR
     prob = round(min(0.9, max(0.005, prob)), 3)
 
     if s.confidence == "low":

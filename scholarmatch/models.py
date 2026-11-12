@@ -226,6 +226,9 @@ class HardCheck(BaseModel):
     name: str
     result: Tri
     detail: str
+    # "restrictive": an unknown that, if it does not apply, rules the student out (e.g. "children of employees
+    # of X"). It counts 0 toward eligibility certainty (a normal unknown counts 0.5) and cuts the estimated chance.
+    weight: Literal["normal", "restrictive"] = "normal"
 
 
 class RubricLine(BaseModel):
