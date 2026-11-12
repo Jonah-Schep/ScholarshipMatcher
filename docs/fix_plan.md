@@ -10,7 +10,7 @@ ends in one branch and one pull request.
 
 | WP | Fixes item(s) | Depends on | Status | Branch / PR | Notes |
 |---|---|---|---|---|---|
-| WP0 Regression corpus + eval script | groundwork | none | todo | | |
+| WP0 Regression corpus + eval script | groundwork | none | done (2026-11-12) | `fix/still-to-fix` | 42 strict xfails (WP3 12, WP4 6, WP5 12, WP6 12); see "WP0 notes" |
 | WP1 UI and launch config | 9, 11 | none | todo | | |
 | WP2 Certainty when information is missing | 2 | WP0 | todo | | |
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | todo | | |
@@ -64,7 +64,7 @@ order**. WP1 touches only `app.py`, `textutil.py` and `.claude/launch.json` and 
   every AcademicWorks row gets an `Enrollment` check that passes, so `n = 1`, `passed = 1` → 100%.
 - **The LLM criteria cache ignores `RULES_VERSION`.** `Supervisor._llm_criteria` caches under
   `PROMPT_VERSION:model`. After a rules change, a cached LLM `Criteria` would lack the new rule-carried
-  fields. WP0 adds `RULES_VERSION` to that cache version.
+  fields. WP0 adds `RULES_VERSION` to that cache version (done).
 - **In LLM mode the Filter agent already targets group-limited awards** (its prompt covers membership,
   employer and family affiliation). Those awards dominated the manual tests because the LLM endpoint was down
   and every item fell back to rules. The deterministic fixes below are still required (invariant 1, offline mode).
@@ -111,6 +111,96 @@ order**. WP1 touches only `app.py`, `textutil.py` and `.claude/launch.json` and 
 
 **Done when:** suite green with xfails; eval script prints a baseline table; the baseline is pasted into this
 file under WP0 notes.
+
+### WP0 notes (2026-11-12)
+
+**Files.** `tests/fixtures/regression_listings.jsonl` (67 rows), `tests/fixtures/regression_names.txt`,
+`tests/regression_profiles.py` (`PROFILES`, `load_corpus`), `tests/test_regression.py`, `scripts/eval_profiles.py`,
+`scripts/export_regression.py`. `Supervisor._llm_criteria` now caches under `PROMPT_VERSION:RULES_VERSION:model`.
+
+**Corpus.** 9 real SC CHE rows (copied unchanged from `data/export/sc_che.jsonl`); 58 synthetic rows
+(`extra.synthetic = true`) whose text is written from the wording in the two test notes. The 33 VT awards that
+are in the local sample keep their real `source_id`, name and URL; only the text is synthetic (the local rows are
+title-only). ECU, USC, the Charlotte counselor page and 7 VT awards from round 2 have `syn-…` ids. Synthetic rows
+have `extra.detail_fetched = true` (they stand in for a detail page) and deadline 2030-01-22.
+Each line has two sibling keys that `load_corpus` strips before `Scholarship` validation:
+- `expect`: `{profile: {"result": ..., "check": ...}}`. The test asserts that the **worst** result over all checks
+  equals `result`, and, when `check` is given, that the check with that name gives `result`. The check names
+  for future rules are the ones this plan uses: `Specific group` (WP3, and WP6 National Guard), `Locality` (WP4
+  counties, school systems, high schools), `Residency` (WP4 out-of-state; the plan did not name this check, so
+  WP4 may rename it, and must then update the corpus), `Field of study` / `Education level` (WP5), `Age`, `Type of
+  college`, `Citizenship` (WP6).
+- `ineligible_for`: profiles the notes call ineligible. Only `eval_profiles.py` uses it. It also lists cases no WP
+  can decide in the hard filter (Richard E. Browning '71: an internship requirement), which have no `expect`.
+
+**Profiles.** The seven from the notes (`r1p1`…`r1p4`, `maya`, `derek`, `aisha`) plus one control, **`sam`** (SC
+HS senior, citizen, GPA 3.7 → USC, Biology). Deviation: round 1 profile 3 is not a U.S. citizen with a 2.8 GPA,
+so once WP6 adds the HOPE/LIFE rules she is not eligible for LIFE/Palmetto Fellows either; `sam` is the student who
+must keep them. Facts the notes do not give stay unset (as the Profile form leaves them), so `military_affiliation`
+is `None` for everyone. Consequence: **SC National Guard CAP expects `unknown` (Specific group), not `fail`**, for
+`r1p3` and `derek` (invariant 4, D1); WP6's `fail` path only applies when the profile says "no".
+
+**xfail marks.** One dict, `XFAIL`, at the top of `tests/test_regression.py`, grouped by WP and keyed by
+(scholarship name, profile id). Each entry becomes `xfail(strict=True, reason="WPn")`. When a WP makes a case
+pass, the strict mark turns into a failure: delete the entry. An entry that no longer matches a corpus case fails
+collection. Counts: WP3 12, WP4 6, WP5 12, WP6 12 (42). WP2 has none (it changes certainty, not check results).
+
+**For WP6 in particular.** The HOPE / Need-based Grant / LIFE / Palmetto `Citizenship` expectations need the
+hand-entered supplement text in the row. The test reads the corpus rows directly (no ingest), so WP6 must put the
+merged text into those four corpus rows (or make the merge a function the test can call).
+
+**Bugs noticed while building the corpus (not fixed, WP0 only):**
+- `extract_rules.extract`, AcademicWorks fallback: `"graduate" in low_hard` also matches "graduates of" /
+  "graduated from", so the row gets `levels = ["undergrad", "graduate"]` (Garris → `unknown` for Maya; the
+  corpus expects `unknown` there, which is acceptable on a university portal). WP5 should use a word boundary.
+- "rising seniors" is stored as class year `senior`, so a **junior** (who *is* a rising senior) fails Class
+  year (Donald F. Morris for `r1p2`; the expectation still holds because the field fails too). WP5.
+- The Dean's Roundtable is currently excluded for `r1p2` by Class year only; the Field-of-study reason (College
+  of Science vs CS) is the WP5 xfail.
+
+**How to run.**
+- `python -m pytest -q tests/test_regression.py` (also part of the full suite).
+- `python scripts/eval_profiles.py` (local catalog), `--db PATH` (another catalog), `--corpus` (the corpus loaded
+  into a temp DB; the best measure without the full catalog), `--show` (names in each top ten), `--as-of` (default
+  2026-11-12, fixed so runs are comparable). The catalog is always copied to a temp DB first.
+- `python scripts/export_regression.py --db PATH [--dry-run]` replaces corpus lines with real rows of the same
+  normalised name and keeps `expect` / `ineligible_for`. It skips title-only rows, so on this machine it only
+  rewrites the 9 SC CHE rows (byte-identical). With the full catalog, ECU/USC names written from the notes
+  ("American Legion Post #39 Scholarship", "Anthony Fox Scholarship", …) may differ from the real titles: fix the
+  name in the corpus, `regression_names.txt` and `XFAIL` together.
+
+**Baseline (rules-2, rubric-1, rule-based, as of 2026-11-12).** `eligible` = passed SQL + hard filter;
+`matches` = shown (top 30); `known_inel` = matches the notes call ineligible; `elig_lost` = awards the corpus
+expects `pass`/`unknown` that were excluded.
+
+Local catalog (77 rows; VT rows are title-only, so most VT false positives cannot be seen by the rules):
+```
+profile  eligible matches known_inel inel_top10 elig_lost
+r1p1            0       0          0          0         0
+r1p2           47      30         28          9         0
+r1p3            5       5          5          5         0
+r1p4           49      30          2          2         0
+maya            0       0          0          0         0
+derek           3       3          3          3         0
+aisha          49      30          6          0         0
+sam             6       6          0          0         2
+total         159     104         44         19         2
+```
+
+Regression corpus (`--corpus`, 67 rows):
+```
+profile  eligible matches known_inel inel_top10 elig_lost
+r1p1            9       9          0          0         0
+r1p2           15      15          6          4         0
+r1p3            5       5          5          5         0
+r1p4           23      23          0          0         0
+maya           11      11          6          6         0
+derek           4       4          3          3         0
+aisha          22      22         12          5         0
+sam             6       6          0          0         2
+total          95      95         32         23         2
+```
+`sam` loses LIFE and Palmetto Fellows to the "enhancement" major text (WP6).
 
 ## WP1 — UI and launch config (items 9, 11)
 

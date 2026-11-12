@@ -161,7 +161,9 @@ class Supervisor:
 
     def _llm_criteria(self, s: Scholarship, chash: str, rules: Criteria) -> Criteria:
         """Extractor agent with a reflexion loop: ungrounded fields are sent back once, then discarded."""
-        version = f"{config.PROMPT_VERSION}:{self.llm.model('extractor')}"
+        # RULES_VERSION is part of the key: `to_criteria` carries rule-extracted fields into the LLM criteria,
+        # so a rules change must invalidate the cached LLM criteria too.
+        version = f"{config.PROMPT_VERSION}:{config.RULES_VERSION}:{self.llm.model('extractor')}"
         cached = db.get_criteria(s.key, "llm", chash, version)
         if cached:
             return cached

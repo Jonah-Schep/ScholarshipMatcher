@@ -1,0 +1,69 @@
+# Awards named in docs/manual_test_2026-11-10*.md. Used by scripts/export_regression.py.
+# One name per line, matched to catalog rows by normalised name.
+College of Science Dean's Roundtable Scholarship
+Alie Reichling Memorial Scholarship
+Archie R. and Dorothy A. Moss Scholarship
+Buzz's Bunch Scholarship
+Caitlin Millar Hammaren Memorial Scholarship
+CLAHS Faculty Campaign Scholarship
+Cobb Office Products, Inc. Scholarship
+Donald F. Morris Endowed Scholarship
+Dunham Charitable Scholarship Fund
+English Family-Teacher Education Scholarship
+Faculty-Staff Dependent and Spouse Scholarship
+Hallie L. Hughes Scholarship
+Harry Bramhall Gilbert Meritorious Scholarship
+Herman C. and Carrie Watson Scholarship
+Hoban, Lee and Dance Scholarship
+Holdren Family Scholarship (in Honor of Gary and Helen Holdren)
+Honors College Scholarship Application
+IMPACT Scholarships (Inclusion improving Medicine, Patient outcomes And Community health with Talent)
+Kimberly Ware Outstanding Achievement Award
+Lena L. Giannotti Scholarship for Family and Child Development
+Margaret Groseclose Skelton Scholarship
+Martin Luther and Clara B. Vaughan Scholarship
+Melinda Marie Somers Memorial Scholarship
+Merryman Public Pupil Transportation (School Bus) Scholarship
+MIT Scholars
+Mo Donaldson Memorial Scholarship
+The Virginia Tech Tribal Match Scholarship
+Timothy Owens Sheperd Service Award
+C.T. Tate Distinguished Co-op Senior Award
+Austin Michelle Cloyd Social Justice Scholarship
+Nagy & Jennifer Maalouf Scholarship
+Adam Ward '11 Memorial Scholarship
+Graham Stedman Neal Diabetes Fund
+O. C. Thompson Scholarship
+Universal Leaf Tobacco Company Scholarship
+McGuireWoods LLP Scholarship
+Smithfield Foundation Scholarship
+VCCS Transfer Achievement Scholarship
+Mossberg Table Tennis Scholarship (Freshman)
+Richard E. Browning '71 Scholarship
+Growing the Future of Clinical Nurse Specialists
+Merchandising Advisory Board and Faculty Fund
+Robert S. and Ann P. Griffin Endowed Scholarship
+Burevitch Scholarship, Occupational Therapy
+Burevitch Scholarship, Physician Assistant Studies
+Caswell Center Scholarship, Recreational Therapy
+Addictions and Rehabilitation Studies Inclusion Scholarship
+JB & Vera Congleton Scholarship
+Myrtle Westmoreland Scholarship
+Pecheles Automotive Scholarship
+American Legion Post #39 Scholarship
+Justin Bryce Clark Scholarship
+Garris Scholarship
+Service League Scholarship
+Griffin Memorial Scholarship
+Anthony Fox Scholarship
+Larry and Pat Wilson Scholarship
+Senator John G. Blackmon Mechanical Engineering Scholarship
+Free Tuition for Residents Over 60
+LIFE Scholarship
+Lottery Tuition Assistance
+Nursing Educator Tuition Reimbursement
+Palmetto Fellows Scholarship
+South Carolina HOPE Scholarship (Freshmen)
+South Carolina National Guard College Assistance Program (SCNG CAP)
+South Carolina Need-based Grant
+South Carolina Workforce & Industry Needs Scholarship (SC•WINS)

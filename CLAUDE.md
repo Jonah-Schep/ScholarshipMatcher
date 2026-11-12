@@ -12,7 +12,11 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - Install: `pip install -r requirements.txt`
 - Tests: `python -m pytest -q` (no network or key needed; must stay green)
   - One test: `python -m pytest -q tests/test_pipeline.py::test_no_pii_reaches_agents` (or `-k <substring>`)
-  - `test_units.py` = parsers, rules, rubric; `test_pipeline.py` = Supervisor end-to-end with `FakeLLM`
+  - `test_units.py` = parsers, rules, rubric; `test_pipeline.py` = Supervisor end-to-end with `FakeLLM`;
+    `test_regression.py` = manual-test awards × profiles through `extract_rules` + `hard_filter` (strict xfails per WP)
+- False-positive eval (rule-based, offline): `python scripts/eval_profiles.py` (local catalog), `--db PATH`,
+  `--corpus` (regression corpus only), `--show`. Works on a temp copy; never writes to the catalog.
+- Refresh the regression corpus from a real catalog: `python scripts/export_regression.py --db PATH [--dry-run]`
 - App: `streamlit run app.py` (launch config `scholarmatch` in `.claude/launch.json`, port 8517)
 - Sample catalog, offline: `python scripts/load_sample.py`
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
@@ -41,6 +45,7 @@ Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
 3. For each shortlisted scholarship (in parallel across scholarships): Extractor (criteria + quotes, grounded) → rule re-check →
    Filter (keep/drop/uncertain; a drop must quote the listing) → Scorer (fit category + evidence) → Verifier
    (checks claims only, never sees the Scorer's reasoning). Each loop is at most `MAX_SUPERVISOR_ROUNDS` rounds.
+   LLM criteria are cached per row under `PROMPT_VERSION:RULES_VERSION:model` (they carry rule-extracted fields).
 4. `rubric.py` turns categories into points, chance, effort and expected value → saves the `MatchRun` and audit events to the DB.
 Chat (`agents/chat.py`) answers follow-ups on a single scholarship from the listing, the stored rubric and a compacted history.
 Full sequence diagram: `docs/architecture.md`.
@@ -101,15 +106,23 @@ Full sequence diagram: `docs/architecture.md`.
 - The LLM response cache lives in the DB. Two `FakeLLM`s in one test share it — use separate tests when a
   scenario needs different scripted answers for the same prompt.
 - `tests/fixtures/*.html` are trimmed real pages (fetched 2026-11-10). Regenerate when a site's markup changes.
+- Regression corpus: `tests/fixtures/regression_listings.jsonl` (9 real SC CHE rows + 58 rows with
+  `extra.synthetic = true`, text written from the test notes) and `tests/regression_profiles.py` (the seven
+  made-up test students plus the control `sam`). Each line has sibling keys `expect` / `ineligible_for`, stripped by
+  `load_corpus`. Known-wrong cases are listed in `XFAIL` in `tests/test_regression.py` by WP; a WP that fixes one
+  must delete its entry (strict). Details: `docs/fix_plan.md` → "WP0 notes".
 
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit); 25 tests. Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`.
+  audit). Tests: 157 collected = 115 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0 done.
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
 - Catalog: 2,467 scraped rows (ECU 1,235, USC 1,000, VT 187, Google Sites 36, SC CHE 9). About 1,000 USC rows have past deadlines.
+  That catalog is not on the Windows checkout, which has only the 77-row sample (49 of 50 VT rows title-only);
+  use `eval_profiles.py --corpus` there.
 - Not built: BigFuture (terms unconfirmed), CareerOneStop (needs user's API credentials + docs), embedded
   Google Docs on counselor pages, PDF rule extraction for SC CHE.
 
