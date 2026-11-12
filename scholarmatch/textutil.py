@@ -51,7 +51,9 @@ def sha(*parts) -> str:
 
 
 def parse_amounts(raw: str) -> tuple[Optional[float], Optional[float]]:
-    """Return (min, max) only from explicit dollar figures; else (None, None)."""
+    """Return (min, max) only from explicit dollar figures; else (None, None).
+    Figures under $50 (including "$0.00", which AcademicWorks shows for program-support funds) are
+    not award amounts, so a listing whose only figure is $0 parses as unknown (None, None)."""
     vals = []
     for m in _MONEY.finditer(raw or ""):
         v = float(m.group(1).replace(",", ""))
@@ -63,6 +65,12 @@ def parse_amounts(raw: str) -> tuple[Optional[float], Optional[float]]:
     if not vals:
         return None, None
     return min(vals), max(vals)
+
+
+def is_zero_amount(raw: str) -> bool:
+    """True when the amount text names dollar figures and every one of them is zero ("$0.00", "$0 - $0")."""
+    figures = [float(m.group(1).replace(",", "")) for m in _MONEY.finditer(raw or "")]
+    return bool(figures) and all(v == 0 for v in figures)
 
 
 def parse_date(raw: str, default_year: Optional[int] = None) -> Optional[str]:

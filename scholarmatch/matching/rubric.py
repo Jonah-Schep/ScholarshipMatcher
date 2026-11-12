@@ -15,7 +15,7 @@ import re
 from typing import Optional
 
 from ..models import Criteria, HardCheck, MatchResult, RubricLine, Scholarship, ScoreJudgement, StudentProfile
-from ..textutil import money, norm
+from ..textutil import is_zero_amount, money, norm
 
 FIT_POINTS = {"strong": 35, "moderate": 24, "weak": 10, "none": 0}
 FIT_ODDS = {"strong": 1.6, "moderate": 1.0, "weak": 0.5, "none": 0.15}
@@ -81,11 +81,24 @@ def effort_hours(c: Criteria, essay_reuse: str) -> tuple[float, list[str]]:
     return round(hours, 2), parts
 
 
+ZERO_AMOUNT_FLAG = "No award amount is listed; this may be program support rather than a student scholarship."
+
+
 def amount_value(s: Scholarship) -> Optional[float]:
+    """Midpoint of the stated range. A zero (or missing) amount is unknown, never $0."""
     if s.amount_min is None and s.amount_max is None:
         return None
     lo, hi = s.amount_min or s.amount_max, s.amount_max or s.amount_min
-    return round((lo + hi) / 2, 2)
+    if not lo or not hi:
+        return None
+    v = round((lo + hi) / 2, 2)
+    return v if v > 0 else None
+
+
+def amount_display(s: Scholarship) -> str:
+    """The amount text shown to the student; "$0.00" and empty text become "Varies"."""
+    raw = (s.amount_raw or "").strip()
+    return "Varies" if not raw or is_zero_amount(raw) else raw
 
 
 def _value_points(v: Optional[float]) -> tuple[float, str]:
@@ -176,9 +189,11 @@ def build_result(s: Scholarship, c: Criteria, p: StudentProfile, checks: list[Ha
 
     if s.confidence == "low":
         flags.append("Listing came from a hand-edited page and may be out of date; confirm details at the source.")
+    if is_zero_amount(s.amount_raw) and ZERO_AMOUNT_FLAG not in flags:
+        flags.append(ZERO_AMOUNT_FLAG)
     return MatchResult(
         scholarship_key=s.key, name=s.name, url=s.url, source=s.source, sponsor=s.sponsor or "",
-        amount_display=s.amount_raw or "Varies", amount_value=value, deadline=s.deadline, open_date=s.open_date,
+        amount_display=amount_display(s), amount_value=value, deadline=s.deadline, open_date=s.open_date,
         hard_checks=checks, judgement=j, rubric=lines, match_score=round(sum(l.points for l in lines), 1),
         win_probability=prob, effort_hours=hours, ease=round(100 * max(0.0, 1 - hours / 10), 0),
         expected_value=round(prob * value, 2) if value is not None else None,

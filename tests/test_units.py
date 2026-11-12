@@ -4,7 +4,7 @@ from scholarmatch.ingest import extract_rules, scam
 from scholarmatch.scrapers import academicworks as aw
 from scholarmatch.scrapers import gsites, state_aid
 from scholarmatch.scrapers.pending import classify_geo_scope
-from scholarmatch.textutil import is_grounded, parse_amounts, parse_date, redact_pii
+from scholarmatch.textutil import is_grounded, is_zero_amount, parse_amounts, parse_date, redact_pii
 from tests.conftest import sch
 
 FIX = Path(__file__).parent / "fixtures"
@@ -31,6 +31,19 @@ def test_amounts_and_dates():
     assert parse_date("March 1, 2027") == "2027-03-01"
     assert parse_date("Feb. 6") is None           # no year -> do not guess
     assert parse_date("Ended") is None
+
+
+def test_zero_amount_is_unknown_not_zero():
+    from scholarmatch.matching import rubric
+    assert parse_amounts("$0.00") == (None, None)
+    assert parse_amounts("$0 - $0") == (None, None)
+    assert is_zero_amount("$0.00") and is_zero_amount("$0 - $0")
+    assert not is_zero_amount("$0 - $1,000") and not is_zero_amount("Varies") and not is_zero_amount("")
+    zero = sch("z", "Program Fund", "Supports the program.", amount_raw="$0.00", amount_min=0, amount_max=0)
+    assert rubric.amount_value(zero) is None and rubric.amount_display(zero) == "Varies"
+    assert rubric.amount_display(sch("v", "V", "x", amount_raw="")) == "Varies"
+    real = sch("r", "Real", "x", amount_raw="$500-$5,000", amount_min=500, amount_max=5000)
+    assert rubric.amount_value(real) == 2750 and rubric.amount_display(real) == "$500-$5,000"
 
 
 def test_redaction():

@@ -85,9 +85,11 @@ class Supervisor:
             exclusions.append(Exclusion(scholarship_key=d["s"].key, name=d["s"].name, stage="cap",
                                         reason=f"Eligible, but ranked below the top {config.MAX_LLM_CANDIDATES} on the pre-score."))
         self._audit("supervisor", "shortlist", {"eligible": len(candidates), "shortlisted": len(shortlist)})
+        say(f"Shortlisted {len(shortlist)} of {len(candidates)} eligible scholarships…", 0.08)
 
         results: list[MatchResult] = []
         if self.mode == "heuristic":
+            say("Scoring with the rule-based rubric…", 0.5)
             results = [d["pre"] for d in shortlist]
         else:
             view = p.redacted_view()
@@ -96,6 +98,7 @@ class Supervisor:
             def work(d):
                 return self._evaluate(d, p, view)
 
+            say(f"Agents reviewing scholarships… 0/{len(shortlist)}", 0.1)
             with ThreadPoolExecutor(max_workers=config.LLM_WORKERS) as pool:
                 for out in pool.map(work, shortlist):          # map preserves input order
                     done += 1

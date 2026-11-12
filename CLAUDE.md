@@ -17,7 +17,8 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - False-positive eval (rule-based, offline): `python scripts/eval_profiles.py` (local catalog), `--db PATH`,
   `--corpus` (regression corpus only), `--show`. Works on a temp copy; never writes to the catalog.
 - Refresh the regression corpus from a real catalog: `python scripts/export_regression.py --db PATH [--dry-run]`
-- App: `streamlit run app.py` (launch config `scholarmatch` in `.claude/launch.json`, port 8517)
+- App: `streamlit run app.py`, port 8517. Launch configs in `.claude/launch.json`: `scholarmatch` (Windows,
+  `python` on PATH) and `scholarmatch-mac` (`.venv/bin/python`, since `python` is not on PATH on the Mac).
 - Sample catalog, offline: `python scripts/load_sample.py`
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
   - Sources: `vt`, `usc`, `ecu` (AcademicWorks), `sc_che`, `gsites`, `manual`. USC is large: use
@@ -115,8 +116,12 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 157 collected = 115 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0 done.
+  audit). Tests: 162 collected = 120 pass + 42 strict xfail (the regression corpus; WP3 12, WP4 6, WP5 12, WP6 12).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0 and WP1 done.
+- Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
+  "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
+- Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
+  "Varies", and the result gets a "No award amount is listed" flag (`rubric-2`). It is not excluded.
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -152,12 +157,9 @@ False positives still dominate the results. Highest impact first:
    Science awards pass for nursing students.
 8. **"Incoming freshman" and "enrolled in nursing" for high-school seniors:** awards requiring a declared
    College of Nursing major should be a Verify for pre-nursing freshmen, not a pass.
-9. **UI:** the run header says "AI-reviewed" even when every item fell back to heuristic (it should count items
-   where `mode == "llm"`). The progress label stays on "Filtering the catalog…" while agents run. Program-support
-   funds (e.g. Andrew and Margaret Little Real Estate fund) show "Award $0.00".
+9. *(Fixed in WP1: run header counts AI-reviewed items, progress label, "$0.00" awards. Not yet checked in the running app.)*
 10. **VT scrape:** check that VT rows have `detail_fetched` (round 1 found title-only rows). Re-scrape without `--max-details` if needed.
-11. **Launch config:** `.claude/launch.json` runs `python`, which is not on PATH on the Mac. Use the venv interpreter
-    (`.venv/bin/python`) or `python3`.
+11. *(Fixed in WP1: launch config `scholarmatch-mac` uses `.venv/bin/python`.)*
 
 ## Conventions
 - Windows dev box (PowerShell primary; Git Bash available). Use forward-slash paths in code via `pathlib`.

@@ -13,7 +13,7 @@ from typing import Optional
 from .. import config, db
 from ..llm import LLM, LLMError, dumps
 from ..models import MatchResult, MatchRun, Scholarship, StudentProfile
-from ..textutil import money
+from ..textutil import is_zero_amount, money
 
 SYSTEM = """You are a scholarship advisor helping one student with one scholarship they selected in a matching app.
 
@@ -133,7 +133,7 @@ class ChatAgent:
     def _offline_answer(self, s: Scholarship, key: str) -> str:
         r = self.by_key.get(key)
         lines = ["(AI chat needs an LLM provider — see README. Here is what the app already knows.)", "",
-                 f"{s.name} — {s.amount_raw or 'amount varies'}, deadline {s.deadline or s.deadline_raw or 'not listed'}."]
+                 f"{s.name} — {'amount varies' if not s.amount_raw or is_zero_amount(s.amount_raw) else s.amount_raw}, deadline {s.deadline or s.deadline_raw or 'not listed'}."]
         if r:
             lines += [f"• {l.dimension}: {l.rating} — {l.why}" for l in r.rubric]
             lines += [f"• {f}" for f in r.flags]

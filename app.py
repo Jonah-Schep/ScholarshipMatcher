@@ -14,7 +14,8 @@ from scholarmatch.agents.supervisor import Supervisor
 from scholarmatch.llm import get_llm
 from scholarmatch.matching import rubric
 from scholarmatch.models import Essay, MatchResult, StudentProfile
-from scholarmatch.textutil import money
+from scholarmatch.run_summary import review_mode_label
+from scholarmatch.textutil import is_zero_amount, money
 
 st.set_page_config(page_title="ScholarMatch", page_icon="🎓", layout="wide")
 
@@ -202,7 +203,7 @@ def page_matches(pid: str) -> None:
 
     stale = run.fingerprint != sup.fingerprint(p, config_today())
     s = run.stats
-    st.caption(f"Run {run.run_id} · evaluated as of {run.as_of} · {'AI-reviewed' if run.mode == 'llm' else 'rule-based'}"
+    st.caption(f"Run {run.run_id} · evaluated as of {run.as_of} · {review_mode_label(run)}"
                + (" · ⚠️ your profile or the catalog changed since this run — press Find to refresh" if stale else ""))
     m = st.columns(4)
     m[0].metric("In catalog", s["catalog"])
@@ -329,7 +330,8 @@ def page_saved(pid: str) -> None:
         with st.container(border=True):
             a, b, c = st.columns([4, 2, 1])
             a.markdown(f"**[{snap.get('name', key)}]({snap.get('url', '')})**")
-            a.caption(f"{snap.get('amount_display', '')} · deadline {snap.get('deadline') or 'not listed'}"
+            amt = snap.get("amount_display", "")
+            a.caption(f"{'Varies' if not amt or is_zero_amount(amt) else amt} · deadline {snap.get('deadline') or 'not listed'}"
                       + (" · ⚠️ now closed" if live and live.status == "ended" else ""))
             status = b.selectbox("Status", SAVED_STATUS, index=SAVED_STATUS.index(it["status"]), key=f"st-{key}", label_visibility="collapsed")
             note = a.text_input("Note", it["note"], key=f"note-{key}", label_visibility="collapsed", placeholder="Notes…")

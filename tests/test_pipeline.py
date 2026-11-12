@@ -1,8 +1,10 @@
 from scholarmatch import db
 from scholarmatch.agents.chat import ChatAgent
 from scholarmatch.agents.supervisor import Supervisor
-from scholarmatch.llm import OfflineLLM
+from scholarmatch.llm import LLMError, OfflineLLM
 from scholarmatch.matching import rubric
+from scholarmatch.models import ScoreJudgement
+from scholarmatch.run_summary import ai_reviewed_count, review_mode_label
 from tests.conftest import AS_OF, FakeLLM
 
 
@@ -117,6 +119,56 @@ def test_sorting_and_saved(catalog, profile):
     assert db.list_saved("t1")[0]["key"] == "test:svc" and db.load_profile("t1").gpa == 3.6
     db.delete_profile("t1")
     assert db.load_profile("t1") is None and db.list_saved("t1") == []
+
+
+class ScorerDownLLM(FakeLLM):
+    """Every Scorer call fails, as on 2026-11-10 when the endpoint returned 502 for most calls."""
+    name = "fake-scorer-down"
+
+    def _structured(self, role, system, user, schema):
+        if schema is ScoreJudgement:
+            raise LLMError("502 backend unavailable")
+        return super()._structured(role, system, user, schema)
+
+
+def test_run_header_counts_items_actually_reviewed_by_agents(catalog, profile):
+    down = Supervisor(ScorerDownLLM()).run(profile, AS_OF)
+    assert down.mode == "llm" and down.results
+    assert all(r.mode == "heuristic" for r in down.results)
+    assert ai_reviewed_count(down) == 0
+    assert review_mode_label(down) == "rule-based (AI review unavailable)"
+    assert all(any("AI review step failed" in f for f in r.flags) for r in down.results)
+
+
+def test_run_header_labels_for_working_and_offline_runs(catalog, profile):
+    ok = Supervisor(FakeLLM()).run(profile, AS_OF)
+    n = len(ok.results)
+    assert n and review_mode_label(ok) == f"AI-reviewed ({n} of {n})"
+    partial = ok.model_copy(update={"results": [ok.results[0].model_copy(update={"mode": "heuristic"}), *ok.results[1:]]})
+    assert review_mode_label(partial) == f"AI-reviewed ({n - 1} of {n})"
+    assert review_mode_label(Supervisor(OfflineLLM()).run(profile, AS_OF)) == "rule-based"
+
+
+def test_progress_reports_agent_stage_before_first_item_finishes(catalog, profile):
+    msgs = []
+    Supervisor(FakeLLM()).run(profile, AS_OF, progress=lambda msg, frac: msgs.append((msg, frac)))
+    texts = [m for m, _ in msgs]
+    assert texts[0].startswith("Filtering the catalog")
+    assert any(t.startswith("Shortlisted") for t in texts)
+    first = next(i for i, t in enumerate(texts) if t.startswith("Agents reviewing scholarships… 0/"))
+    assert first < next(i for i, t in enumerate(texts) if t.startswith("Agents reviewing scholarships… 1/"))
+    assert [f for _, f in msgs] == sorted(f for _, f in msgs) and texts[-1] == "Done."
+
+
+def test_zero_award_amount_shows_as_unknown(profile):
+    from scholarmatch.scrapers.runner import ingest
+    from tests.conftest import sch
+    ingest([sch("prog", "Andrew and Margaret Little Real Estate Fund", "Supports the real estate program.",
+                amount_raw="$0.00", amount_min=None, amount_max=None)])
+    r = get(Supervisor(OfflineLLM()).run(profile, AS_OF), "test:prog")
+    assert r.amount_display == "Varies" and r.amount_value is None and r.expected_value is None
+    assert rubric.ZERO_AMOUNT_FLAG in r.flags
+    assert next(line for line in r.rubric if line.dimension == "Award value").rating == "varies"
 
 
 def test_chat_persists_and_works_offline(catalog, profile):

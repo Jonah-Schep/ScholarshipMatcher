@@ -11,7 +11,7 @@ ends in one branch and one pull request.
 | WP | Fixes item(s) | Depends on | Status | Branch / PR | Notes |
 |---|---|---|---|---|---|
 | WP0 Regression corpus + eval script | groundwork | none | done (2026-11-12) | `fix/still-to-fix` | 42 strict xfails (WP3 12, WP4 6, WP5 12, WP6 12); see "WP0 notes" |
-| WP1 UI and launch config | 9, 11 | none | todo | | |
+| WP1 UI and launch config | 9, 11 | none | done (2026-11-12) | `fix/still-to-fix` | `rubric-2` (zero-amount flag); header not checked in the running app; see "WP1 notes" |
 | WP2 Certainty when information is missing | 2 | WP0 | todo | | |
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | todo | | |
 | WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | todo | | |
@@ -221,9 +221,31 @@ Tests: unit test for zero amounts; a pipeline test that a `FakeLLM` run where ev
 AI-reviewed items (test the helper that builds the header text, not Streamlit). Check the header in the
 running app (`scholarmatch` preview config).
 
+### WP1 notes (2026-11-12)
+
+- **Run header.** New pure module `scholarmatch/run_summary.py` (`ai_reviewed_count`, `review_mode_label`), used by
+  `app.page_matches`; it imports no Streamlit, so tests call it directly. Tests in `test_pipeline.py`: a
+  `ScorerDownLLM` (every Scorer call raises `LLMError`) gives a run with `mode == "llm"`, 0 items with `mode ==
+  "llm"` and the label "rule-based (AI review unavailable)"; a working `FakeLLM` run gives "AI-reviewed (N of N)";
+  offline gives "rule-based". **Not checked in the running app** (the WP1 session could not drive a browser); check
+  it with the `scholarmatch` preview config during WP8.
+- **Progress.** `Supervisor.run` now reports "Shortlisted N of M eligible scholarships…" (0.08), then "Agents
+  reviewing scholarships… 0/N" (0.1) before the thread pool starts, or "Scoring with the rule-based rubric…" (0.5)
+  offline. Fractions stay monotonic (tested).
+- **"$0.00" awards.** Deviation from the plan text: `parse_amounts` already returned `(None, None)` for "$0.00"
+  (figures under $50 are dropped), so ingest is unchanged and stores nothing new. The "$0.00" came from
+  `MatchResult.amount_display = s.amount_raw`. Now `textutil.is_zero_amount(raw)` detects all-zero dollar text;
+  `rubric.amount_display(s)` shows "Varies" for it; `rubric.amount_value` returns `None` for a zero midpoint (guard
+  only: no ingested row has a stored 0); `build_result` adds `rubric.ZERO_AMOUNT_FLAG`. The Saved page and the
+  offline chat answer also show "Varies" for an old "$0.00" snapshot. No rubric number changes for existing rows,
+  but the flag and display text change the stored result, so `RUBRIC_VERSION` went to `rubric-2` (invariant 8:
+  same-day stored runs would otherwise keep "$0.00"). **WP2 therefore bumps to `rubric-3`.**
+- **Launch config.** `scholarmatch` unchanged; `scholarmatch-mac` runs `.venv/bin/python` (not tested on a Mac;
+  there is no `.venv` on the Windows checkout).
+
 ## WP2 — Certainty when information is missing (item 2)
 
-Files: `matching/rubric.py`, `config.py` (`RUBRIC_VERSION` → `rubric-2`), tests.
+Files: `matching/rubric.py`, `config.py` (`RUBRIC_VERSION` → `rubric-3`; WP1 already used `rubric-2`), tests.
 
 - Add `info_level(s, c) -> "none" | "thin" | "ok"` in `rubric.py`:
   - `none`: `s.extra.get("detail_fetched") is False`, or the listing text other than the name is under 40 characters.
