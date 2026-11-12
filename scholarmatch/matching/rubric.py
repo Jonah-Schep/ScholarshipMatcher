@@ -38,6 +38,8 @@ def pool_tier(s: Scholarship, c: Criteria) -> str:
         return "department" if (c.majors or s.college_or_department) else "school"
     if c.localities or s.region:
         return "local"
+    if getattr(c, "destination_schools", None):
+        return "school"                    # "students enrolling at X Community College": one school's students
     if len(c.residency_states) == 1 or s.geo_scope in ("nc", "va", "sc"):
         return "state"
     if c.residency_states or s.geo_scope == "multi_state":
@@ -57,6 +59,7 @@ def narrowing(c: Criteria) -> list[str]:
     if c.pell_required or c.need_based: out.append("need-based")
     if c.class_years: out.append("specific class year")
     if c.restricted_groups: out.append("limited to a specific group")
+    if c.non_resident_required: out.append("out-of-state students only")
     return out
 
 

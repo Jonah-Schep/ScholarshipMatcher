@@ -14,7 +14,7 @@ ends in one branch and one pull request.
 | WP1 UI and launch config | 9, 11 | none | done (2026-11-12) | `fix/still-to-fix` | `rubric-2` (zero-amount flag); header not checked in the running app; see "WP1 notes" |
 | WP2 Certainty when information is missing | 2 | WP0 | done (2026-11-12) | `fix/still-to-fix` | `rubric-3`; `HardCheck.weight` + x0.25 chance factor ready for WP3; see "WP2 notes" |
 | WP3 Awards limited to a specific group | 1 | WP0, WP2 | done (2026-11-12) | `fix/still-to-fix` | `rules-3`, `rubric-4`; all 12 WP3 xfails fixed, plus 2 SCNG CAP (WP6) ones; Profile form not checked in the running app; see "WP3 notes" |
-| WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | todo | | |
+| WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | done (2026-11-12) | `fix/still-to-fix` | `rules-4`, `rubric-5`; all 6 WP4 xfails fixed; Locality check semantics changed (see "WP4 notes"); remaining xfails WP5 12, WP6 10 |
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | todo | | |
 | WP6 SC CHE programs | 5 | WP5 | todo | | |
 | WP7 Extractor agent learns the new fields | LLM parity | WP6 | todo | | |
@@ -433,6 +433,82 @@ Tests: Watson (Northampton / Accomack), Gilbert (Chesapeake Public Schools), Ant
 CPCC), Margaret Groseclose Skelton (Smyth County), Moss (Montgomery Co. / Radford HS), O. C. Thompson;
 a student from the named county passes; "preference given to residents of Roanoke County" stays soft
 (existing `women` fixture).
+
+### WP4 notes (2026-11-12)
+
+- **Code.** `models.Criteria.destination_schools: list[str]` and `non_resident_required: Optional[bool]`.
+  `extract_rules`: `localities(hard)`, `destination_schools(hard)`, `non_resident_required(hard)`,
+  `non_resident_has_alternative(sentence)`, `non_resident_state(sentence)`; the old "any `X County` in any hard sentence"
+  loop and the Charlotte-only high-school pattern are gone. `hard_filter`: `locality_check`, `college_check` ("College
+  attending"), `non_resident_check` (check name **"Residency"**, as in the WP0 corpus). `rubric.pool_tier` puts a row with
+  `destination_schools` (and no locality) in the `school` tier; `rubric.narrowing` adds "out-of-state students only".
+  `workers.to_criteria` copies `restricted_groups`, `destination_schools`, `non_resident_required` and their evidence
+  from `rules` (`_RULE_ONLY_FIELDS`); no prompt change, not in `_HARD_FIELDS`. `RULES_VERSION = "rules-4"`,
+  `RUBRIC_VERSION = "rubric-5"` (pool tier / narrowing change Competition points and the chance for those rows).
+- **Locality extraction as built.** Hard sentences only. Place shapes (case-sensitive proper names): county lists ("A or
+  B counties", "A, B and C Counties", "counties of A and B", slashes like "Concord/Cabarrus"), "X County", "City of X",
+  "X (City) Public School(s) (system)" → stored as "X Public Schools", "Charlotte-Mecklenburg Schools" / "CMS
+  seniors", "X High School". A place counts only when restrictive wording points at it: a plural trigger right before
+  it ("students/applicants/graduates/seniors from|of|at|in", "residents of", "high schools in", "counties of"), or a
+  singular/verb trigger ("resident of", "a graduate of", "senior at", "graduated from", "attend", "enrolled in", "live
+  in") that starts the sentence (bullet style) or follows a word about the applicant (students, applicants, must,
+  eligible, every, …), or a following noun ("Smyth County residents", "a Mecklenburg County public … school"), or "or"/
+  "and" after an accepted place ("… Counties in NC or York County, SC"). Articles may sit in between ("graduates of a
+  Pitt County high school"). Skipped: "were/was residents of" (biography), negated sentences ("… are not eligible"),
+  "born in", sponsor addresses, preference sentences. **Deviation:** an award *name* alone ("Charlotte County
+  Scholarship") no longer yields a locality (no restrictive wording); before WP4 it did.
+- **Locality check (semantics changed; read before WP5).** Each entry is parsed into a kind and split on commas, "/",
+  "or", "and"; names match as whole words (Smyth ≠ Smythe). County entry: pass if the name is the student's county (or
+  city, for independent cities); fail if the student gave a county and it differs; **unknown if only a city / high
+  school was given** (before: fail). City / school-system entry: compared with county and city; fail if either was given
+  and neither matches; unknown if only a high school was given. High-school entry: compared with `p.high_school`; with
+  no high school given, unknown when the school's name contains the student's city or county ("West Charlotte" for a
+  Charlotte student), fail otherwise (a Pitt County student is not a West Charlotte senior; the corpus expects this for
+  Maya). Combined: any pass → pass, else any unknown → unknown, else fail. No location at all → unknown. Details never
+  repeat the student's county / city / high school (they reach the chat agent).
+- **College attending.** Only for rows without `s.school`. Triggers "enrolling/enrolled at", "attend(ing)", "planning
+  to attend/enroll at", "will attend", "accepted to/at/into", "admitted to", followed by a capitalised name ending in
+  Community College / Technical College / College / University / Institute (at least one word before it, so "admitted to
+  the College of Nursing" does not match) or "University of X"; "X or the University of Y" gives both. Questions ("Why
+  … attending CPCC?") are skipped. Match: whole-phrase containment either way against the student's schools (codes
+  expanded to `config.SCHOOLS` names) or the initials ("CPCC"). No schools → unknown; none match → fail.
+- **Out-of-state.** "out-of-state students/applicants/residents/undergraduates/freshmen", "non-resident(s) (of
+  <state>)", "non-<State> residents"; not "nonresident tuition/fees/aliens", not "residents and non-residents", not
+  negated, not in a preference sentence; "transferring from an out-of-state institution" does not match. The existing
+  state-residency rule no longer reads "non-residents of Virginia" as VA residency. School state from
+  `config.SCHOOLS[s.school][1]`; for a non-school row, the state the sentence names; otherwise unknown. Same state → fail,
+  or a **restrictive** unknown when " or " joins the out-of-state phrase to another way in ("out-of-state students or
+  descendants of O. C. Thompson"); different state → pass.
+- **Tests.** `test_units.py`: 13 locality positives, 9 negatives (two preference sentences, biography, "were residents
+  of", sponsor address, negated, award name), grounded evidence, the Locality check matrix (named county passes,
+  Smythe ≠ Smyth, city-only → unknown, high-school rules, CMS, details do not echo the student's location), destination
+  positives/negatives and the check, out-of-state positives/negatives and the check (fail / pass / restrictive unknown
+  / no state → unknown), pool tier, narrowing and the `to_criteria` carry-over. The conftest `women` fixture ("Preference
+  given to residents of Roanoke County") still has no locality (`test_rules_preference_is_soft_not_hard`).
+- **xfails.** All 6 WP4 entries removed; no `expect` value changed. Remaining: WP5 12, WP6 10 (22).
+- **Not handled (left for later):** a locality sentence with an "or" alternative ("Resident of Mecklenburg … Counties
+  or have accessed Time Out Youth programming", a local Queen City row) still fails a student from elsewhere; only the
+  out-of-state rule has the "or" downgrade. In LLM mode `localities` still come from the Extractor alone (WP7 should
+  union them with the rule values).
+- **Eval (as of 2026-11-12, rule-based).** Regression corpus (`--corpus`), rules-3/rubric-4 → rules-4/rubric-5:
+  ```
+  profile  eligible matches known_inel inel_top10 elig_lost      (before: eligible / known_inel / inel_top10)
+  r1p1            8       8          0          0         0      (9 / 0 / 0)
+  r1p2           14      14          5          4         0      (15 / 6 / 5)
+  r1p3            5       5          5          5         0
+  r1p4           23      23          0          0         0
+  maya           10      10          5          5         0      (11 / 6 / 6)
+  derek           4       4          3          3         0
+  aisha          21      21         11          2         0      (22 / 12 / 3)
+  sam             6       6          0          0         2
+  total          91      91         29         19         2      (95 / 32 / 22)
+  ```
+  Watson is now excluded for r1p2 and Aisha, Anthony Fox for Maya and r1p1 (College attending: she applies to ECU, not
+  CPCC; the notes do not list it for r1p1, so it is not counted in `known_inel`). Watson was in Aisha's top ten before;
+  her top ten now holds only Richard E. Browning '71 (internship, no hard-filter rule) and Faculty-Staff Dependent. O. C.
+  Thompson stays in her list with a restrictive Residency unknown, below the top ten (as before). `elig_lost` did not
+  grow (2, both WP6). Local catalog: **unchanged** (159 / 104 / 43 / 18 / 2). The Queen City rows now carry their
+  county lists, but all 18 are `status = ended`, so no profile sees them.
 
 ## WP5 — Graduate programs, departments and declared majors (items 4, 7, 8)
 

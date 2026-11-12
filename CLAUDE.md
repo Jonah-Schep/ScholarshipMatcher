@@ -96,6 +96,7 @@ Full sequence diagram: `docs/architecture.md`.
 |---|---|
 | Add/alter a profile field | `models.StudentProfile` (+ `redacted_view` decision), `app.page_profile`, `hard_filter.check` |
 | Group-limited awards ("children of employees of X", members, transfers) | `extract_rules.GROUP_PATTERNS`, `hard_filter.group_check` |
+| Counties, high schools, destination college, out-of-state | `extract_rules.localities` / `destination_schools` / `non_resident_required`, `hard_filter.locality_check` / `college_check` / `non_resident_check` |
 | New eligibility rule | `ingest/extract_rules.py` (regex), `models.Criteria`/`ExtractedCriteria`, `hard_filter.check`, extractor prompt |
 | Scoring weights, chance model, sort orders | `matching/rubric.py` |
 | Prompts and agent contracts | `agents/workers.py`, `models.py` |
@@ -117,8 +118,8 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 - Done: AcademicWorks, SC CHE, Google Sites, manual CSV scrapers; scam screen; rule extraction; hard filter;
   rubric; supervisor + 4 worker agents; chat with compaction; Streamlit UI (profile, matches, saved, chat,
-  audit). Tests: 176 collected = 148 pass + 28 strict xfail (the regression corpus; WP4 6, WP5 12, WP6 10).
-  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP3 done.
+  audit). Tests: 183 collected = 161 pass + 22 strict xfail (the regression corpus; WP5 12, WP6 10).
+  Major matching by specific field and the "graduating senior" rule were fixed in `rules-2`. Fix plan WP0–WP4 done.
 - Run header: `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)" from items with `mode == "llm"`,
   "rule-based (AI review unavailable)" when an LLM run had no item reviewed, else "rule-based".
 - Amounts: a "$0.00" award (program-support funds) is unknown: `amount_value` is `None`, `amount_display` is
@@ -133,6 +134,15 @@ Full sequence diagram: `docs/architecture.md`.
   "Specific group": pass on a distinctive-word overlap with `StudentProfile.affiliations`, fail only when
   `no_special_affiliations` is ticked, else a restrictive unknown (decision D1). Both profile fields stay local; the
   check detail never repeats the affiliation text. `workers.to_criteria` carries `restricted_groups` from rules until WP7.
+- Locality, college, out-of-state (`rules-4`, `rubric-5`): `extract_rules.localities` reads county lists, "City of X",
+  "X Public Schools" and "X High School" only behind restrictive wording ("students from", "residents of", "graduates
+  of", "senior at", "must attend", "X County residents"), never from preference sentences, biographies or addresses.
+  `hard_filter.locality_check` splits entries into names and matches whole words by kind (county vs `p.county`; city /
+  school system vs county or city; high school vs `p.high_school`); a county limit with only a city given is unknown.
+  `Criteria.destination_schools` ("enrolling at X Community College", rows without `s.school`) → "College attending";
+  `Criteria.non_resident_required` ("out-of-state students", "non-residents of Virginia") → "Residency" (fail for the
+  school's own state, restrictive unknown when "or" offers another way in). `to_criteria` carries both from rules
+  (`workers._RULE_ONLY_FIELDS`) until WP7. Check details never repeat the student's county / city / high school.
 - Live LLM: runs through VT ARC (`SM_LLM_PROVIDER=openai_compat`). It was unreliable on 2026-11-10: most calls
   returned `502 backend 'GLM-5.3' unavailable`, so nearly every result fell back to `mode="heuristic"`. Anthropic is still untested.
   After any live run, check the **Data & audit** page for `rejected` / `llm_failure` events.
@@ -151,16 +161,17 @@ False positives still dominate the results. Highest impact first:
    fields were not checked in the running app.)*
 2. *(Fixed in WP2: title-only rows are capped at 30% certainty and rows with no stated requirement at 60%, so they
    rank below rows with confirmed requirements; `rubric-3`.)*
-3. **Locality and school limits are missed:** "students from Northampton or Accomack counties", "graduated
-   from the Chesapeake Public School system", "senior at West Charlotte High School enrolling at Central Piedmont
-   Community College". These need patterns for the county list, the school system/high school, and the destination college.
+3. *(Fixed in WP4: county lists, cities, school systems and high schools behind restrictive wording → "Locality";
+   destination college → "College attending"; `rules-4`, `rubric-5`. A locality sentence with an "or" alternative
+   still fails a non-local student.)*
 4. **Graduate and professional programs** (Clinical Nurse Specialist, Nurse Practitioner, Physician Assistant,
    Dental Medicine, MSN/DNP) carry no `graduate` level restriction.
 5. **SC CHE programs:** Free Tuition for Residents Over 60 (needs an age rule), SC WINS and Lottery Tuition
    Assistance (technical/two-year colleges only, so an institution-type rule), SC National Guard CAP (Guard members
    only; since WP3 a restrictive "Specific group" unknown, but no fail when the profile says "not military"), HOPE/LIFE (rules are only in the linked PDFs). LIFE and Palmetto
    Fellows are wrongly excluded because the STEM/education/accounting "enhancement" text is read as a major restriction.
-6. **"Out-of-state students"** is not a residency rule (O. C. Thompson).
+6. *(Fixed in WP4: "out-of-state students" / "non-residents of X" → "Residency" check, restrictive unknown when the
+   sentence offers another way in, as for O. C. Thompson.)*
 7. **Majors named as a department or college still slip through:** "College of Health and Human Sciences"
    becomes the broad `health sciences` field, so Child Development, Addictions & Rehab and Family & Consumer
    Science awards pass for nursing students.

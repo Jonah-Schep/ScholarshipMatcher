@@ -388,3 +388,158 @@ def test_to_criteria_carries_restricted_groups_from_rules():
     c = to_criteria(x, rules)
     assert c.restricted_groups == ["children of employees of Acme Corp"]
     assert c.evidence["restricted_groups"] == rules.evidence["restricted_groups"]
+
+
+# ----------------------------------------------------------------------------- WP4: locality, college, out-of-state
+def _ex(text, **kw):
+    return extract_rules.extract(sch("l", "Example Scholarship", text, **kw))
+
+
+def test_locality_patterns_positive():
+    cases = {
+        "For students from Northampton or Accomack counties.": ["Northampton County", "Accomack County"],
+        "Open to residents of Mecklenburg, Union and Gaston Counties.":
+            ["Mecklenburg County", "Union County", "Gaston County"],
+        "Open to residents of the counties of Northampton and Accomack.": ["Northampton County", "Accomack County"],
+        "For students from Smyth County in the College of Liberal Arts and Human Sciences.": ["Smyth County"],
+        "Smyth County residents are eligible.": ["Smyth County"],
+        "For graduates of a Pitt County high school.": ["Pitt County"],
+        "Must attend a high school in Mecklenburg County": ["Mecklenburg County"],
+        "Resident of Mecklenburg, Union, Iredell Counties in NC or York County, SC":
+            ["Mecklenburg County", "Union County", "Iredell County", "York County"],
+        "Open to residents of the City of Chesapeake.": ["City of Chesapeake"],
+        "Applicants must have graduated from the Chesapeake Public School system and be college seniors.":
+            ["Chesapeake Public Schools"],
+        "For CMS seniors.": ["Charlotte-Mecklenburg Schools"],
+        "Every senior at West Charlotte High School enrolling at Central Piedmont Community College is eligible.":
+            ["West Charlotte High School"],
+        "For graduates of Radford High School or high schools in Montgomery County.":
+            ["Montgomery County", "Radford High School"],
+    }
+    for text, locs in cases.items():
+        assert _ex(text).localities == locs, (text, _ex(text).localities)
+
+
+def test_locality_patterns_negative():
+    for text in ("Preference given to residents of Roanoke County.",            # preference stays soft
+                 "Priority is given to graduates of Radford High School.",
+                 "Born in Smyth County, Margaret Skelton established this scholarship for students in CLAHS.",
+                 "Born in Smyth County and a graduate of Marion High School, she created this fund for students.",
+                 "He graduated from Marion High School in 1950.",
+                 "The Skeltons were residents of Smyth County for forty years.",
+                 "Administered by the Smyth County Community Foundation, 123 Main Street, Marion.",
+                 "Residents of Fairfax County are not eligible.",
+                 "Charlotte County Scholarship"):
+        assert _ex(text).localities == [], (text, _ex(text).localities)
+    c = _ex("Open to students majoring in nursing. Preference given to residents of Roanoke County.")
+    assert c.localities == [] and any("Roanoke" in x for x in c.soft_criteria)
+
+
+def test_locality_evidence_is_grounded():
+    s = sch("l", "Watson Scholarship", "For students from Northampton or Accomack counties. Minimum GPA of 3.0.")
+    c = extract_rules.extract(s)
+    assert is_grounded(c.evidence["localities"], s.full_text())
+
+
+def _check(s, name, **kw):
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    c = extract_rules.extract(s)
+    return next((h for h in hard_filter.check(s, c, StudentProfile(profile_id="x", **kw)) if h.name == name), None)
+
+
+def test_locality_check():
+    watson = sch("w", "Watson Scholarship", "For students from Northampton or Accomack counties.")
+    assert _check(watson, "Locality", county="Accomack").result == "pass"          # the named county passes
+    assert _check(watson, "Locality", county="Northampton County").result == "pass"
+    assert _check(watson, "Locality", county="Henrico").result == "fail"
+    assert _check(watson, "Locality").result == "unknown"                          # nothing given
+    assert _check(watson, "Locality", city="Onley").result == "unknown"           # a city does not name a county
+    smyth = sch("s", "Skelton Scholarship", "For students from Smyth County.")
+    assert _check(smyth, "Locality", county="Smythe").result == "fail"             # whole words only
+    assert _check(smyth, "Locality", county="Smyth").result == "pass"
+    gilbert = sch("g", "Gilbert Scholarship", "Applicants must have graduated from the Chesapeake Public School system.")
+    assert _check(gilbert, "Locality", city="Chesapeake").result == "pass"
+    assert _check(gilbert, "Locality", county="Chesapeake").result == "pass"       # independent city as county
+    assert _check(gilbert, "Locality", county="Henrico").result == "fail"
+    assert _check(gilbert, "Locality", high_school="Hickory High School").result == "unknown"
+    moss = sch("m", "Moss Scholarship", "For graduates of Radford High School or high schools in Montgomery County.")
+    assert _check(moss, "Locality", high_school="Radford High School").result == "pass"
+    assert _check(moss, "Locality", county="Montgomery").result == "pass"
+    assert _check(moss, "Locality", county="Loudoun").result == "fail"
+    fox = sch("f", "Fox Scholarship", "Every senior at West Charlotte High School is eligible.")
+    assert _check(fox, "Locality", high_school="West Charlotte High").result == "pass"
+    assert _check(fox, "Locality", high_school="Myers Park High School").result == "fail"
+    assert _check(fox, "Locality", city="Charlotte", county="Mecklenburg").result == "unknown"   # may be theirs
+    assert _check(fox, "Locality", county="Pitt").result == "fail"
+    cms = sch("c", "CMS Scholarship", "For CMS seniors.")
+    assert _check(cms, "Locality", city="Charlotte").result == "pass"
+    hit = _check(watson, "Locality", county="Accomack", city="Onancock", high_school="Nandua High School")
+    assert not any(x in hit.detail for x in ("Onancock", "Nandua"))               # never echo the student's location
+
+
+def test_destination_college():
+    fox = sch("f", "Anthony Fox Scholarship",
+              "Every senior at West Charlotte High School enrolling at Central Piedmont Community College is eligible.")
+    assert extract_rules.extract(fox).destination_schools == ["Central Piedmont Community College"]
+    assert _check(fox, "College attending").result == "unknown"
+    assert _check(fox, "College attending", intended_schools=["ecu"]).result == "fail"
+    assert _check(fox, "College attending", intended_schools=["Central Piedmont"]).result == "pass"
+    assert _check(fox, "College attending", intended_schools=["ecu", "CPCC"]).result == "pass"
+    two = _ex("Open to students planning to attend East Carolina University or the University of South Carolina.")
+    assert two.destination_schools == ["East Carolina University", "University of South Carolina"]
+    s2 = sch("u", "X", "Open to students accepted to the University of South Carolina.")
+    assert _check(s2, "College attending", intended_schools=["usc"]).result == "pass"
+    for text in ("Why are you interested in attending Central Piedmont Community College?",
+                 "Must be enrolled in the College of Nursing.",
+                 "Students must be admitted to the College of Engineering.",
+                 "Planning to enroll at a 4-year college or university."):
+        assert _ex(text).destination_schools == [], text
+    # on a school's own portal the Enrollment check covers the college
+    aw = sch("a", "X", "For students attending Virginia Western Community College.", source="academicworks_vt",
+             school="vt", geo_scope="va")
+    assert extract_rules.extract(aw).destination_schools == []
+
+
+def test_out_of_state():
+    for text in ("Open to out-of-state students.", "Open to non-residents of Virginia.",
+                 "For non-Virginia residents."):
+        c = _ex(text)
+        assert c.non_resident_required is True and c.residency_states == [], text
+    for text in ("Both residents and non-residents may apply.", "Covers nonresident tuition for one year.",
+                 "Out-of-state students are not eligible.", "Preference given to out-of-state students.",
+                 "Students transferring from an out-of-state institution must reapply."):
+        assert _ex(text).non_resident_required is None, text
+    vt = dict(source="academicworks_vt", school="vt", geo_scope="va")
+    only = sch("o", "X", "Open to out-of-state students.", **vt)
+    assert _check(only, "Residency", state="VA").result == "fail"
+    assert _check(only, "Residency", state="NC").result == "pass"
+    thompson = sch("t", "O. C. Thompson Scholarship", "For out-of-state students or descendants of O. C. Thompson.", **vt)
+    alt = _check(thompson, "Residency", state="VA")
+    assert alt.result == "unknown" and alt.weight == "restrictive"
+    assert _check(sch("n", "X", "Open to non-residents of Virginia."), "Residency", state="VA").result == "fail"
+    assert _check(sch("n", "X", "Open to out-of-state students."), "Residency", state="VA").result == "unknown"
+
+
+def test_wp4_fields_narrow_and_carry_over():
+    from scholarmatch.agents.workers import to_criteria
+    from scholarmatch.matching import rubric
+    from scholarmatch.models import ExtractedCriteria
+    fox = sch("f", "X", "Open to seniors enrolling at Central Piedmont Community College.")
+    cf = extract_rules.extract(fox)
+    assert rubric.pool_tier(fox, cf) == "school"
+    out = sch("o", "X", "Open to out-of-state students.", source="academicworks_vt", school="vt", geo_scope="va")
+    co = extract_rules.extract(out)
+    assert "out-of-state students only" in rubric.narrowing(co)
+    x = ExtractedCriteria(min_gpa=None, residency_states=[], localities=[], levels=[], class_years=[], majors=[],
+                          need_based=None, pell_required=None, gender=None, ethnicities=[], disability_required=None,
+                          first_generation_required=None, military_affiliation_required=None,
+                          us_citizen_or_resident_required=None, num_awards=None, essay_count=None,
+                          recommendation_letters=None, transcript=None, interview=None, fafsa=None,
+                          portfolio_or_audition=None, other_requirements=[], soft_criteria=[], scam_signals=[],
+                          evidence=[])
+    c1, c2 = to_criteria(x, cf), to_criteria(x, co)
+    assert c1.destination_schools == ["Central Piedmont Community College"]
+    assert c1.evidence["destination_schools"] == cf.evidence["destination_schools"]
+    assert c2.non_resident_required is True
+    assert c2.evidence["non_resident_required"] == co.evidence["non_resident_required"]

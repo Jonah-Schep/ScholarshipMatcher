@@ -86,6 +86,10 @@ class Criteria(BaseModel):
     # Awards limited to a specific group (children of employees of X, descendants of Y, members of Z, holders of
     # another award, transfer students, a medical condition). Short phrases copied from the listing.
     restricted_groups: list[str] = Field(default_factory=list)
+    # Colleges the student must be enrolling at / attending ("enrolling at Central Piedmont Community College"). Only
+    # read for rows without `Scholarship.school` (the Enrollment check covers a school's own portal).
+    destination_schools: list[str] = Field(default_factory=list)
+    non_resident_required: Optional[bool] = None                # "out-of-state students", "non-residents of Virginia"
     num_awards: Optional[int] = None
     application_method: Literal["direct", "general_application", "automatic", "unknown"] = "unknown"
     requirements: Requirements = Field(default_factory=Requirements)

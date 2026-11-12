@@ -25,14 +25,7 @@ SEVERITY = {"pass": 0, "unknown": 1, "fail": 2}
 # (scholarship name, profile_id) -> work package that should fix it. Delete entries as they are fixed.
 XFAIL: dict[str, list[tuple[str, str]]] = {
     # WP3 (awards limited to a specific group): all 12 fixed in rules-3.
-    "WP4": [  # county lists, school systems, high schools, destination college, out-of-state
-        ("Herman C. and Carrie Watson Scholarship", "r1p2"),
-        ("Herman C. and Carrie Watson Scholarship", "aisha"),
-        ("Harry Bramhall Gilbert Meritorious Scholarship", "r1p2"),
-        ("Harry Bramhall Gilbert Meritorious Scholarship", "aisha"),
-        ("Anthony Fox Scholarship", "maya"),
-        ("O. C. Thompson Scholarship", "aisha"),
-    ],
+    # WP4 (county lists, school systems, high schools, destination college, out-of-state): all 6 fixed in rules-4.
     "WP5": [  # graduate / professional programs, departments and colleges, declared majors
         ("College of Science Dean's Roundtable Scholarship", "r1p2"),
         ("Hallie L. Hughes Scholarship", "r1p2"),

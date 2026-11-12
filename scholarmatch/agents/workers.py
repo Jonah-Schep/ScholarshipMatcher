@@ -117,12 +117,18 @@ def run_extractor(llm: LLM, s: Scholarship, feedback: str = "") -> ExtractedCrit
     return llm.structured("extractor", EXTRACTOR_SYSTEM, user, ExtractedCriteria)
 
 
+# Criteria fields the Extractor schema does not have yet (WP7 adds them); copied from the rules with their evidence.
+_RULE_ONLY_FIELDS = ("restricted_groups", "destination_schools", "non_resident_required")
+
+
 def to_criteria(x: ExtractedCriteria, rules: Criteria) -> Criteria:
     """LLM fields + things only rules know (application method from the source's structure, and the criteria the
-    Extractor schema does not have yet: `restricted_groups`, carried from rules with their evidence until WP7)."""
+    Extractor schema does not have yet: `restricted_groups`, `destination_schools`, `non_resident_required`, carried
+    from rules with their evidence until WP7)."""
     evidence = {e.field: e.quote for e in x.evidence}
-    if rules.restricted_groups and rules.evidence.get("restricted_groups"):
-        evidence["restricted_groups"] = rules.evidence["restricted_groups"]
+    for f in _RULE_ONLY_FIELDS:
+        if getattr(rules, f) and rules.evidence.get(f):
+            evidence[f] = rules.evidence[f]
     return Criteria(
         min_gpa=x.min_gpa if x.min_gpa is None or 1.0 <= x.min_gpa <= 4.0 else None,
         residency_states=_norm_states(x.residency_states), localities=x.localities, levels=x.levels,
@@ -131,7 +137,8 @@ def to_criteria(x: ExtractedCriteria, rules: Criteria) -> Criteria:
         disability_required=x.disability_required, first_generation_required=x.first_generation_required,
         military_affiliation_required=x.military_affiliation_required,
         us_citizen_or_resident_required=x.us_citizen_or_resident_required, num_awards=x.num_awards,
-        restricted_groups=list(rules.restricted_groups), application_method=rules.application_method,
+        restricted_groups=list(rules.restricted_groups), destination_schools=list(rules.destination_schools),
+        non_resident_required=rules.non_resident_required, application_method=rules.application_method,
         requirements=Requirements(essay_count=x.essay_count, recommendation_letters=x.recommendation_letters,
                                   transcript=x.transcript, interview=x.interview, fafsa=x.fafsa,
                                   portfolio_or_audition=x.portfolio_or_audition, other=x.other_requirements),

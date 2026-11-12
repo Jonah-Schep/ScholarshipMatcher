@@ -11,7 +11,7 @@ import json
 import re
 
 from .. import config, db
-from ..ingest.extract_rules import STATE_NAMES, field_match
+from ..ingest.extract_rules import STATE_NAMES, field_match, non_resident_has_alternative, non_resident_state
 from ..models import Criteria, HardCheck, Scholarship, StudentProfile
 from ..textutil import norm
 
@@ -87,17 +87,11 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
         add("Residency", "pass" if ok else "fail", f"Residents of {', '.join(c.residency_states)}; you live in {p.state}.")
 
     if c.localities:
-        mine = norm(" | ".join([p.county, p.city, p.high_school]))
-        if not mine.replace("|", "").strip():
-            add("Locality", "unknown", f"Limited to {', '.join(c.localities[:3])}; add your county/city/high school.")
-        else:
-            hit = False
-            for loc in c.localities:
-                l = norm(loc).replace(" county", "")
-                charlotte = any(k in l for k in ("charlotte", "mecklenburg", "cms"))
-                if (l and l in mine) or (charlotte and ("mecklenburg" in mine or "charlotte" in mine)):
-                    hit = True
-            add("Locality", "pass" if hit else "fail", f"Limited to {', '.join(c.localities[:3])}.")
+        out.append(locality_check(c.localities, p))
+    if c.destination_schools and not s.school:
+        out.append(college_check(c.destination_schools, p))
+    if c.non_resident_required:
+        out.append(non_resident_check(s, c, p))
 
     if c.levels:
         upper_years_only = bool(c.class_years) and "freshman" not in c.class_years
@@ -158,6 +152,118 @@ def check(s: Scholarship, c: Criteria, p: StudentProfile) -> list[HardCheck]:
     if c.restricted_groups:
         out.append(group_check(c.restricted_groups, p))
     return out
+
+
+# --------------------------------------------------------------------------- locality, college, out-of-state (WP4)
+# The details never repeat the student's county / city / high school (check details reach the chat agent).
+def _has_word(name: str, field: str) -> bool:
+    return bool(name) and re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", field) is not None
+
+
+def _loc_names(text: str) -> list[str]:
+    """Split "Northampton or Accomack", "Concord/Cabarrus", "A, B and C" into single normalised names."""
+    parts = re.split(r",|/|\bor\b|\band\b|&", norm(text))
+    return [x for x in (re.sub(r"^(?:the|a|an)\s+", "", p.strip(" .")) for p in parts) if x]
+
+
+def _parse_locality(loc: str) -> tuple[str, list[str]]:
+    """(kind, names) for one locality entry. kind: county | high_school | place (city or school system)."""
+    l = norm(loc)
+    if re.search(r"charlotte[- ]mecklenburg|\bcms\b", l):
+        return "place", ["charlotte", "mecklenburg"]
+    if m := re.search(r"(.+?)\s+count(?:y|ies)\b", l):
+        return "county", _loc_names(re.sub(r"^.*\b(?:of|from|in)\s+", "", m.group(1)))
+    if m := re.search(r"(.+?)\s+high schools?\b", l):
+        return "high_school", [m.group(1).strip()]
+    if m := re.search(r"(?:city|town) of\s+(.+)", l):
+        return "place", _loc_names(m.group(1))
+    if m := re.search(r"(.+?)\s+(?:city\s+)?(?:public\s+)?schools?\b", l):
+        return "place", _loc_names(m.group(1))
+    return "place", _loc_names(l)
+
+
+def _locality_result(loc: str, county: str, city: str, hs: str) -> str:
+    kind, names = _parse_locality(loc)
+    if kind == "high_school":
+        if hs:
+            return "pass" if any(_has_word(n, hs) for n in names) else "fail"
+        # No high school given: a school whose name carries the student's city/county may be theirs; any other
+        # school is somewhere else (the student told us where they live).
+        if county or city:
+            mine = [re.sub(r"\s+county$", "", w) for w in _loc_names(f"{county}, {city}")]
+            near = any(_has_word(w, n) for n in names for w in mine if w)
+            return "unknown" if near else "fail"
+        return "unknown"
+    if kind == "county":
+        if any(_has_word(n, county) or _has_word(n, city) for n in names):
+            return "pass"
+        return "fail" if county else "unknown"       # a city alone does not say which county
+    # a city or school system: independent cities are often given as the county too
+    if any(_has_word(n, county) or _has_word(n, city) for n in names):
+        return "pass"
+    return "fail" if (county or city) else "unknown"
+
+
+def locality_check(locs: list[str], p: StudentProfile) -> HardCheck:
+    """"Locality": pass when any listed county / city / school system / high school is the student's; fail when
+    the student's location rules all of them out; unknown when the profile does not say enough."""
+    shown = ", ".join(locs[:4]) + ("…" if len(locs) > 4 else "")
+    county, city, hs = norm(p.county), norm(p.city), norm(p.high_school)
+    if not (county or city or hs):
+        return HardCheck(name="Locality", result="unknown",
+                         detail=f"Limited to {shown}; add your county, city or high school to confirm.")
+    results = {_locality_result(loc, county, city, hs) for loc in locs}
+    if "pass" in results:
+        return HardCheck(name="Locality", result="pass", detail=f"Limited to {shown}; this matches your location.")
+    if "unknown" in results:
+        return HardCheck(name="Locality", result="unknown",
+                         detail=f"Limited to {shown}; add your county and high school to confirm.")
+    return HardCheck(name="Locality", result="fail", detail=f"Limited to {shown}; your location is not one of these.")
+
+
+def _school_names(text: str) -> set[str]:
+    t = norm(text).strip()
+    if t in config.SCHOOLS:
+        return {t, norm(config.SCHOOLS[t][0])}
+    return {t} if t else set()
+
+
+def _acronym(name: str) -> str:
+    return "".join(w[0] for w in re.findall(r"[a-z0-9]+", norm(name)) if w not in ("of", "the", "and", "at"))
+
+
+def college_check(dest: list[str], p: StudentProfile) -> HardCheck:
+    """"College attending": the award is only for students enrolling at a named college."""
+    shown = " or ".join(dest[:3])
+    mine = set().union(*(_school_names(x) for x in [p.current_school, *p.intended_schools]))
+    if not mine:
+        return HardCheck(name="College attending", result="unknown",
+                         detail=f"Only for students attending {shown}; add the colleges you are applying to.")
+    for d in dest:
+        dn = norm(d)
+        if any(_has_word(dn, m) or _has_word(m, dn) or m == _acronym(d) for m in mine):
+            return HardCheck(name="College attending", result="pass",
+                             detail=f"Only for students attending {shown}; it is on your list of colleges.")
+    return HardCheck(name="College attending", result="fail",
+                     detail=f"Only for students attending {shown}; it is not on your list of colleges.")
+
+
+def non_resident_check(s: Scholarship, c: Criteria, p: StudentProfile) -> HardCheck:
+    """"Residency" for out-of-state awards: fail for a resident of the school's state, unless the same sentence
+    gives another way to qualify ("out-of-state students or descendants of X"), which makes it a restrictive unknown."""
+    sentence = c.evidence.get("non_resident_required", "")
+    state = config.SCHOOLS[s.school][1] if s.school in config.SCHOOLS else non_resident_state(sentence)
+    if not state:
+        return HardCheck(name="Residency", result="unknown",
+                         detail="For out-of-state students; check which state the award counts you as a resident of.")
+    if p.state.upper() != state:
+        return HardCheck(name="Residency", result="pass",
+                         detail=f"For students from outside {state}; you live in {p.state}.")
+    if non_resident_has_alternative(sentence):
+        return HardCheck(name="Residency", result="unknown", weight="restrictive",
+                         detail=f"Mainly for students from outside {state}; you live in {state}, so you would "
+                                f"need to qualify another way the listing names.")
+    return HardCheck(name="Residency", result="fail", detail=f"Only for students from outside {state}; you live in {state}.")
 
 
 # Words that say what KIND of group it is, not WHICH one: they never count as an overlap on their own

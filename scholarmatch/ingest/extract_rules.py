@@ -159,6 +159,174 @@ def restricted_groups(hard: list[str], name: str = "") -> tuple[list[str], str]:
     return groups, evidence
 
 
+# --- locality, destination college, out-of-state (WP4). Only hard sentences are searched, and a place name only
+# becomes a requirement when restrictive wording points at it ("students from", "residents of", "graduates of",
+# "senior at", "must attend", "high schools in", "<X County> residents"). So a county in a preference sentence, in
+# the sponsor's address or in the donor's biography ("born in Smyth County") is not a requirement.
+_PLACE_WORD = r"(?!(?:The|This|Each|Any|All|Every|For|From|Of|In|At|And|Or|To|A|An|Students?|Residents?|Graduates?|" \
+              r"Applicants?|Seniors?|High|School|Schools|Public|County|Counties|City|Must|Be|Have)\b)[A-Z][\w'’]*"
+_PLACE = rf"{_PLACE_WORD}(?:(?: of)? {_PLACE_WORD}|/{_PLACE_WORD}){{0,2}}"
+_PLACE_RX = {
+    # "Northampton or Accomack counties", "Mecklenburg, Union, Gaston Counties", "A, B and C Counties"
+    "county_list": re.compile(rf"({_PLACE}(?:(?:, (?:and |or |& )?| (?:and|or|&) ){_PLACE})*) [Cc]ounties\b"),
+    # "the counties of Northampton and Accomack"
+    "counties_of": re.compile(rf"\b[Cc]ounties of ({_PLACE}(?:(?:, (?:and |or |& )?| (?:and|or|&) ){_PLACE})*)"),
+    "county": re.compile(rf"({_PLACE}) County\b"),
+    "city": re.compile(rf"\b[Cc]ity of ({_PLACE})"),
+    "system": re.compile(rf"({_PLACE}) (?:City )?Public Schools?\b(?: [Ss]ystem)?|\b(Charlotte[- ]Mecklenburg) Schools?\b"),
+    "high_school": re.compile(rf"({_PLACE_WORD}(?:[ -]{_PLACE_WORD}){{0,3}}) High School\b"),
+}
+# Restrictive wording before the place. Plural nouns ("students from") are always restrictive. Singular nouns and
+# verbs ("a graduate of", "graduated from", "attend") are restrictive only at the start of the sentence (a bullet:
+# "Resident of X County") or after a word about the applicant ("Applicants must have graduated from"), so a
+# biography ("…and a graduate of Marion High School, she…") is not read as a rule.
+_LOC_PLURAL = re.compile(
+    r"\b(?:residents of|(?:students|applicants|candidates|graduates|seniors|juniors) (?:from|of|at|in|attending)|"
+    r"(?:high )?schools? (?:in|of)|count(?:y|ies) of)\s+$", re.I)
+_LOC_SINGULAR = re.compile(
+    r"\b(?:resident of|(?:student|applicant|graduate|senior) (?:from|of|at|in|attending)|"
+    r"resid(?:e|es|ing) in|li(?:ve|ves|ving) in|domiciled in|graduat(?:ed|ing|e) from|attend(?:s|ing)?|"
+    r"enrolled (?:at|in))\s+$", re.I)
+_LOC_SUBJECT = re.compile(
+    r"\b(?:students?|applicants?|candidates?|recipients?|nominees?|seniors?|must|eligible|open to|available to|"
+    r"awarded to|limited to|restricted to|every|each|any|all)\b|^\W*(?:for|be|have|current|graduating)\b", re.I)
+_LOC_START = re.compile(r"^\W*(?:(?:must )?be )?(?:an? )?$", re.I)
+_LOC_PAST = re.compile(r"\b(?:was|were|had been|has been)\s+(?:an? )?$", re.I)
+_LOC_AFTER = re.compile(r"^\s+(?:residents?|students?|seniors?|graduates?|high schools?|public|schools?|area)\b", re.I)
+_LOC_FILLER = re.compile(r"(?:\b(?:an?|the|any|public|private)\s+)*$", re.I)     # "graduates of a Pitt County …"
+_LOC_CHAIN = re.compile(r"^(?:\s+in\s+[A-Z]{2}\b|,\s*[A-Z]{2}\b)?,?\s+(?:or|and)\s+(?:an?\s+|the\s+)?$")
+
+
+def _restrictive_before(sent: str, start: int) -> bool:
+    """Is the place starting at `start` introduced by restrictive wording (a few articles may sit in between)?"""
+    head = sent[:start]
+    head = head[:_LOC_FILLER.search(head).start()]
+    m = _LOC_PLURAL.search(head) or _LOC_SINGULAR.search(head)
+    if not m or _LOC_PAST.search(head[:m.start()]):
+        return False                              # no trigger, or "The Smiths were residents of Smyth County"
+    if m.re is _LOC_PLURAL:
+        return True
+    return bool(_LOC_START.match(head[:m.start()]) or _LOC_SUBJECT.search(head[:m.start()]))
+
+
+def _place_names(group: str) -> list[str]:
+    return [p.strip() for p in re.split(r",\s*(?:and |or |& )?|\s+(?:and|or|&)\s+", group) if p.strip()]
+
+
+def localities(hard: list[str]) -> tuple[list[str], str]:
+    """Counties ("X County"), cities ("City of X"), school systems ("X Public Schools") and high schools named as a
+    requirement in hard sentences, plus the first evidence sentence."""
+    out, evidence = [], ""
+
+    def add(loc: str, sent: str):
+        nonlocal evidence
+        loc = squash(loc)
+        if loc and loc.lower() not in {x.lower() for x in out}:
+            out.append(loc)
+            evidence = evidence or sent
+
+    for sent in hard:
+        if _GROUP_NEGATION.search(sent):
+            continue
+        taken: list[tuple[int, int]] = []
+
+        def ok(m: re.Match) -> bool:
+            if any(a <= m.start() < b for a, b in taken):
+                return False
+            if _restrictive_before(sent, m.start()) or _LOC_AFTER.match(sent[m.end():]):
+                return True
+            # "… Counties in NC or York County, SC": a place joined by "or"/"and" to one already accepted
+            return any(b <= m.start() and _LOC_CHAIN.match(sent[b:m.start()]) for _a, b in taken)
+
+        def accept(m: re.Match, *locs: str):
+            for loc in locs:
+                add(loc, sent)
+            taken.append((m.start(), m.end()))
+
+        for kind in ("county_list", "counties_of"):
+            for m in _PLACE_RX[kind].finditer(sent):
+                if ok(m):
+                    accept(m, *(f"{name} County" for name in _place_names(m.group(1))))
+        for m in _PLACE_RX["county"].finditer(sent):
+            if ok(m):
+                accept(m, f"{m.group(1)} County")
+        for m in _PLACE_RX["city"].finditer(sent):
+            if ok(m):
+                accept(m, f"City of {m.group(1)}")
+        for m in _PLACE_RX["system"].finditer(sent):
+            if ok(m):
+                accept(m, f"{m.group(1)} Public Schools" if m.group(1) else "Charlotte-Mecklenburg Schools")
+        for m in _PLACE_RX["high_school"].finditer(sent):
+            if ok(m):
+                accept(m, f"{m.group(1)} High School")
+        if re.search(r"\bCMS (?:student|senior|graduate)s?\b", sent):
+            add("Charlotte-Mecklenburg Schools", sent)
+    return out, evidence
+
+
+# Destination college: "enrolling at / attending / planning to attend / accepted to X Community College".
+_DEST_RX = re.compile(
+    r"\b(?i:enroll(?:ing|ed|s)? at|attend(?:ing|s)?|plan(?:s|ning)? to (?:attend|enroll at)|will attend|"
+    r"intend(?:s|ing)? to (?:attend|enroll at)|accepted (?:to|at|into)|admitted to)\s+(?:the\s+)?")
+_COLLEGE = (rf"((?:{_PLACE_WORD}[ -]){{1,5}}(?:Community College|Technical College|College|University|Institute)\b"
+            r"|University of [A-Z][\w'’]*(?: [A-Z][\w'’]*){0,3})")
+_DEST_RX = re.compile(_DEST_RX.pattern + _COLLEGE)
+_DEST_MORE = re.compile(r"\s*(?:,\s*(?:or\s+|and\s+)?|\s(?:or|and)\s+)(?:the\s+)?" + _COLLEGE)   # "X or the University of Y"
+
+
+def destination_schools(hard: list[str]) -> tuple[list[str], str]:
+    """Colleges named after "enrolling at / attending / planning to attend / accepted to"."""
+    out, evidence = [], ""
+    for sent in hard:
+        if sent.rstrip().endswith("?") or _GROUP_NEGATION.search(sent):
+            continue                          # a question to the applicant is not a rule
+        for m in _DEST_RX.finditer(sent):
+            names, end = [m.group(1)], m.end()
+            while more := _DEST_MORE.match(sent, end):
+                names.append(more.group(1))
+                end = more.end()
+            for name in map(squash, names):
+                if name.lower() not in {x.lower() for x in out}:
+                    out.append(name)
+                    evidence = evidence or sent
+    return out, evidence
+
+
+# Out-of-state: "out-of-state students", "non-residents of Virginia", "non-Virginia residents".
+_STATE_ALT = "|".join(sorted((n.title() for n in STATE_NAMES), key=len, reverse=True))
+_NONRES_RX = re.compile(
+    r"\bout[- ]of[- ]state (?:students?|applicants?|residents?|undergraduates?|freshm[ae]n)\b"
+    rf"|\bnon-?residents?(?: of (?:the (?:state|commonwealth) of )?(?:{_STATE_ALT}))?\b(?! (?:tuition|fees?|rates?|aliens?)\b)"
+    rf"|\bnon-(?:{_STATE_ALT}) residents?\b", re.I)
+_NONRES_NOT = re.compile(r"\b(?:not eligible|ineligible|may not apply|cannot apply|are excluded|is excluded|"
+                         r"not open to)\b|\bresidents? (?:and|or) non-?residents?|\bnon-?residents? (?:and|or) residents?"
+                         r"|\bin-state (?:and|or) out-of-state|\bout-of-state (?:and|or) in-state", re.I)
+
+
+def non_resident_required(hard: list[str]) -> tuple[bool, str]:
+    for sent in hard:
+        if _NONRES_RX.search(sent) and not _NONRES_NOT.search(sent):
+            return True, sent
+    return False, ""
+
+
+def non_resident_has_alternative(sentence: str) -> bool:
+    """"out-of-state students or descendants of X": the out-of-state limit is one of several ways to qualify."""
+    m = _NONRES_RX.search(sentence or "")
+    if not m:
+        return False
+    return bool(re.match(r"\s*,?\s*or\b", sentence[m.end():]) or re.search(r"\bor\s+$", sentence[:m.start()]))
+
+
+def non_resident_state(sentence: str) -> Optional[str]:
+    """The state a "non-residents of Virginia" / "non-Virginia residents" sentence names, if any."""
+    low = (sentence or "").lower()
+    for name, code in sorted(STATE_NAMES.items(), key=lambda kv: -len(kv[0])):
+        if re.search(rf"non-?residents? of (?:the (?:state|commonwealth) of )?{name}\b|non-{name} resident", low):
+            return code
+    return None
+
+
 _NUMWORD = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
             "nine": 9, "ten": 10, "a": 1, "an": 1}
 _ESSAY_Q = re.compile(r"essay|describe|explain|why |how (will|would|has|have|do|did)|tell us|discuss|statement|share ", re.I)
@@ -241,7 +409,7 @@ def extract(s: Scholarship) -> Criteria:
     for name, code in STATE_NAMES.items():
         rx = (rf"resident[s]? of (?:the (?:state|commonwealth) of )?{name}\b|\b{name} resident|"
               rf"(?:reside|live|living|domiciled) in {name}\b|\b{name} (?:high school|domicile|native)|native of {name}\b")
-        m, sent = first(rx)
+        m, sent = first(rf"(?<!non-)(?<!non)(?:{rx})")     # "non-residents of Virginia" is not VA residency
         if m and not (name == "virginia" and "west virginia" in m.group(0).lower()):
             if code not in c.residency_states:
                 c.residency_states.append(code)
@@ -250,15 +418,16 @@ def extract(s: Scholarship) -> Criteria:
         if not c.residency_states:
             c.residency_states = [s.geo_scope.upper()]
             ev["residency_states"] = f"State program administered for {s.geo_scope.upper()} residents"
-    for m in re.finditer(r"\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) County\b", " ".join(hard)):
-        loc = m.group(0)
-        if loc not in c.localities and m.group(1) not in ("The", "This", "Each", "Any"):
-            c.localities.append(loc)
-    m, sent = first(r"\b(Charlotte[- ]Mecklenburg Schools?|CMS (?:student|senior|graduate)s?|graduat\w+ (?:of|from) [A-Z][\w. ]+ High School)")
-    if m:
-        c.localities.append(squash(m.group(1)))
+    c.localities, loc_ev = localities(hard)
     if c.localities:
-        ev["localities"] = next((x for x in hard if c.localities[0] in x), "")
+        ev["localities"] = loc_ev
+    if not s.school:                      # on a school's own portal, Enrollment already covers the college
+        c.destination_schools, dest_ev = destination_schools(hard)
+        if c.destination_schools:
+            ev["destination_schools"] = dest_ev
+    nonres, nonres_ev = non_resident_required(hard)
+    if nonres:
+        c.non_resident_required, ev["non_resident_required"] = True, nonres_ev
 
     # --- level / class year
     # On a university's own portal "graduating senior" means a college senior; on a high-school counselor
