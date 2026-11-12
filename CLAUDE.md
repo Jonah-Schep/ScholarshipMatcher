@@ -114,6 +114,8 @@ Full sequence diagram: `docs/architecture.md`.
   Google Docs on counselor pages, PDF rule extraction for SC CHE.
 
 ## Still to fix (from manual tests: `docs/manual_test_2026-11-10.md`, `docs/manual_test_2026-11-10_round2.md`)
+**The plan for these is `docs/fix_plan.md`** (work packages WP0–WP8, one per session, with a status table).
+Pick up the first `todo` package there; do not start an item below without it.
 False positives still dominate the results. Highest impact first:
 1. **Awards limited to a specific group are not extracted:** children/dependents of employees of X, descendants of
    a named person, children of tobacco growers, holders of a VA tribal scholarship, VT faculty/staff

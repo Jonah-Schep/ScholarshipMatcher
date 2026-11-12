@@ -1,0 +1,299 @@
+# Fix plan for the "Still to fix" list
+
+Written 2026-11-12. Covers items 1–11 of **Still to fix** in `CLAUDE.md`. Evidence for each item is in
+`docs/manual_test_2026-11-10.md` and `docs/manual_test_2026-11-10_round2.md`.
+
+The work is split into nine work packages (WP0–WP8). Each one is sized for a single Claude session and
+ends in one branch and one pull request.
+
+## Status (update this table in the same PR as the work)
+
+| WP | Fixes item(s) | Depends on | Status | Branch / PR | Notes |
+|---|---|---|---|---|---|
+| WP0 Regression corpus + eval script | groundwork | none | todo | | |
+| WP1 UI and launch config | 9, 11 | none | todo | | |
+| WP2 Certainty when information is missing | 2 | WP0 | todo | | |
+| WP3 Awards limited to a specific group | 1 | WP0, WP2 | todo | | |
+| WP4 Locality, school and out-of-state limits | 3, 6 | WP3 | todo | | |
+| WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | todo | | |
+| WP6 SC CHE programs | 5 | WP5 | todo | | |
+| WP7 Extractor agent learns the new fields | LLM parity | WP6 | todo | | |
+| WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | todo | | needs network + the user |
+
+Status values: `todo`, `in progress (date)`, `done (date)`, `blocked (reason)`.
+
+WP3–WP7 all edit `extract_rules.py`, `hard_filter.py` and `models.py`, so they run **one at a time, in
+order**. WP1 touches only `app.py`, `textutil.py` and `.claude/launch.json` and can run alongside any other WP.
+
+## How to pick up a work package
+
+1. Read `CLAUDE.md` (invariants) and this file. Take the first `todo` WP whose dependencies are `done`.
+2. Branch from `main`: `fix/wpN-short-name`. Set the WP to `in progress` in the table.
+3. Write the tests listed under the WP first, see them fail, then implement.
+4. Run `python -m pytest -q` (must be green) and `python scripts/eval_profiles.py` (exists after WP0). Paste
+   the before/after eval counts into the PR description.
+5. In the same PR: set the WP to `done`, fill in the Notes column with anything the next session needs, and
+   remove or reword the fixed items in `CLAUDE.md` → "Still to fix" and "Current state".
+6. If a design choice in this plan turns out wrong, change the plan in the PR and say why. Do not silently diverge.
+
+## Rules that apply to every work package
+
+- **Invariant 4 stays.** A new rule may return `fail` only when the listing states a requirement *and* the
+  profile contradicts it. If the profile is silent, the result is `unknown`.
+- **Version bumps.** Any change to `extract_rules.py` output → `RULES_VERSION` to the next number (`rules-3`,
+  `rules-4`, …). Any change to rubric numbers → `RUBRIC_VERSION`. Any prompt or agent-schema change →
+  `PROMPT_VERSION` (only WP7 should need this).
+- **New `Criteria` fields must survive LLM mode.** `workers.to_criteria` builds the LLM criteria from the
+  Extractor output and drops anything it does not copy. Until WP7, every new field added to `Criteria` must be
+  copied from `rules` inside `to_criteria` (the way `application_method` is today), together with its
+  `evidence` entry. Do not add these fields to `Supervisor._HARD_FIELDS` before WP7.
+- **New `StudentProfile` fields stay local.** Do not add them to `redacted_view()`. `test_no_pii_reaches_agents`
+  must keep passing; extend it to assert the new fields are absent from agent prompts.
+- **Every new regex gets a positive and a negative test**, including a "preference given to …" sentence that
+  must stay soft.
+- **Detail text for the user** follows the existing style: plain language, says what the listing requires and
+  what the student should check.
+
+## Things found while planning that every session should know
+
+- **This Windows checkout has only the 77-row sample catalog** (50 VT, 49 of them title-only; 9 SC CHE; 18
+  Queen City 2 College). The 2,467-row catalog used in round 2 is not here, and there is no `data/http_cache/`.
+  Most of the false positives named in the test notes (ECU, USC, most VT detail text) cannot be reproduced
+  from local data. WP0 deals with this.
+- **Why title-only rows show "100%".** `rubric.build_result` gives 0.8 certainty when there are no checks, but
+  every AcademicWorks row gets an `Enrollment` check that passes, so `n = 1`, `passed = 1` → 100%.
+- **The LLM criteria cache ignores `RULES_VERSION`.** `Supervisor._llm_criteria` caches under
+  `PROMPT_VERSION:model`. After a rules change, a cached LLM `Criteria` would lack the new rule-carried
+  fields. WP0 adds `RULES_VERSION` to that cache version.
+- **In LLM mode the Filter agent already targets group-limited awards** (its prompt covers membership,
+  employer and family affiliation). Those awards dominated the manual tests because the LLM endpoint was down
+  and every item fell back to rules. The deterministic fixes below are still required (invariant 1, offline mode).
+
+## Decisions made in this plan (the owner can overrule)
+
+- **D1. Group-limited awards give `unknown`, not `fail`, by default**, but a *restrictive* unknown that counts
+  as 0 toward certainty and cuts the estimated chance. They sink to the bottom or below the LLM cap instead
+  of ranking in the top ten. They `fail` only when the student has ticked "none of these apply to me" (WP3).
+  Reason: invariant 4. A student who really is an employee's child must not lose the award.
+- **D2. HOPE / LIFE rules come from a hand-entered supplement**, not from PDF scraping (WP6). Three programs
+  do not justify a PDF pipeline, and `scraper-brief.md` already treats state tables as manual work.
+- **D3. Age is asked as an optional number on the profile** and stays local.
+
+---
+
+## WP0 — Regression corpus and evaluation script
+
+**Goal:** give later sessions failing tests to work against, and one command that measures false positives.
+
+1. `tests/fixtures/regression_listings.jsonl`: one `Scholarship` JSON per line, for every award named in
+   the two manual-test notes. Each line has an extra key `expect` (see below).
+   - SC CHE rows: copy the real rows from `data/export/sc_che.jsonl` (present locally).
+   - Everything else: if a full catalog is available (ask the user for the 2,467-row `scholarmatch.db`, or run
+     WP8 step 1 first), export the real rows. Otherwise write the listing text from the wording quoted in the
+     test notes (for example "children of employees of McGuireWoods LLP", "students from Northampton or
+     Accomack counties", "graduated from the Chesapeake Public School system") and set `"synthetic": true`
+     in `extra`. Replace synthetic rows with real ones when the catalog is available.
+   - `scripts/export_regression.py --db PATH --names-file tests/fixtures/regression_names.txt` does the export,
+     so it can be re-run.
+2. `tests/regression_profiles.py`: the seven test profiles as `StudentProfile` objects (round 1: profiles 2, 3,
+   4; round 2: Maya, Derek, Aisha; plus round 1 profile 1). Made-up people, so they can be committed.
+3. `expect` format: `{"maya": {"result": "fail" | "unknown" | "pass", "check": "Field of study"}, …}`. Only
+   list the profiles the notes cover for that award. `result` is the worst check result the hard filter
+   should give. Include the eligible awards too (Blackmon for Derek, MIT Scholars for profile 4, LIFE and
+   Palmetto Fellows for an SC student) as `pass` or `unknown` so that over-exclusion is caught.
+4. `tests/test_regression.py`: parametrised over (listing, profile). Runs `extract_rules.extract` +
+   `hard_filter.check` only. Each case that fails today gets `@pytest.mark.xfail(strict=True, reason="WPn")`.
+   Later WPs remove the marks they fix; `strict=True` makes a forgotten mark fail the suite.
+5. `scripts/eval_profiles.py [--db PATH]`: runs `Supervisor(OfflineLLM)` for each profile on the given catalog
+   and prints, per profile: matches, how many are in the "known ineligible" list from the notes, how many
+   of those are in the top ten. Rule-based only, no network.
+6. `Supervisor._llm_criteria`: cache version becomes `PROMPT_VERSION:RULES_VERSION:model`.
+
+**Done when:** suite green with xfails; eval script prints a baseline table; the baseline is pasted into this
+file under WP0 notes.
+
+## WP1 — UI and launch config (items 9, 11)
+
+Files: `app.py`, `scholarmatch/textutil.py` (`parse_amounts`), `scholarmatch/agents/supervisor.py` (progress
+calls only), `.claude/launch.json`.
+
+- **Run header** (`app.py:205`): count `sum(r.mode == "llm" for r in run.results)`. Show "AI-reviewed (N of M)"
+  when N > 0, "rule-based (AI review unavailable)" when the run's mode is `llm` but N = 0, "rule-based" otherwise.
+- **Progress label:** in `Supervisor.run`, call `say("Agents reviewing scholarships… 0/N", 0.1)` before the
+  thread pool starts, and call `say` for the shortlist step.
+- **"Award $0.00":** a parsed amount of 0 becomes `None` (amount unknown), and `MatchResult.amount_display`
+  shows "Varies" when the raw amount parses to zero. Add a flag "No award amount is listed; this may be
+  program support rather than a student scholarship." Treat it as a display fix; do not exclude the row.
+- **Launch config:** add a second configuration `scholarmatch-mac` using `.venv/bin/python`; keep the existing
+  one for Windows. Update the Commands section of `CLAUDE.md`.
+
+Tests: unit test for zero amounts; a pipeline test that a `FakeLLM` run where every scorer call fails reports 0
+AI-reviewed items (test the helper that builds the header text, not Streamlit). Check the header in the
+running app (`scholarmatch` preview config).
+
+## WP2 — Certainty when information is missing (item 2)
+
+Files: `matching/rubric.py`, `config.py` (`RUBRIC_VERSION` → `rubric-2`), tests.
+
+- Add `info_level(s, c) -> "none" | "thin" | "ok"` in `rubric.py`:
+  - `none`: `s.extra.get("detail_fetched") is False`, or the listing text other than the name is under 40 characters.
+  - `thin`: no hard criterion was extracted (all of GPA, residency, localities, levels, majors, need,
+    demographics and, later, the WP3–WP6 fields are empty).
+  - `ok`: otherwise.
+- The `Enrollment` check is excluded from the certainty ratio (it is a property of the source, not of the listing).
+- Certainty: `none` → capped at 0.30; `thin` → capped at 0.60; `ok` → the existing ratio.
+- Add a per-check weight: `HardCheck.weight: Literal["normal", "restrictive"] = "normal"`. A normal unknown
+  counts 0.5 as today; a restrictive unknown counts 0. WP3 uses it.
+- The "why" line says what is missing ("The listing gives no eligibility details; open the link to check").
+- The estimated chance already scales with certainty; confirm with a test that a title-only row now ranks below a
+  row with two confirmed requirements.
+
+Tests: title-only row is not 100%; `thin` row is ≤ 60%; a row with real passes is unchanged; the sort
+order of the existing pipeline tests still holds (adjust expected numbers only where the rubric change explains it).
+
+## WP3 — Awards limited to a specific group (item 1)
+
+Files: `models.py`, `ingest/extract_rules.py`, `matching/hard_filter.py`, `matching/rubric.py` (`narrowing`,
+`info_level`), `agents/workers.py` (`to_criteria` carry-over), `app.py` (`page_profile`), tests. `RULES_VERSION` bump.
+
+- `Criteria.restricted_groups: list[str]`: short phrases copied from the listing, with the sentence in
+  `evidence["restricted_groups"]`.
+- Patterns (hard sentences only; a "preference" sentence stays soft):
+  - family of an employer's staff: `(child(ren)?|sons? (and|or) daughters?|dependents?|spouses?) of [^.]{0,60}(employees?|staff|faculty|associates|members|growers|farmers)`
+  - descendants: `(direct |lineal |documented )?descendants? of`
+  - membership: `(active |current )?members? of (the )?[A-Z]`, `member in good standing`, known clubs (USATT, 4-H, FFA, Scouts)
+  - holders of another award or programme: `recipients? of (a|the) [^.]{0,60}scholarship`, `receiving a [^.]{0,40}scholarship`, `completed (a|the) [^.]{0,40}(co-?op|internship) program`, `registered with (the )?Services for Students with Disabilities`
+  - transfers: `transfer(ring)? (students? )?from (a |the )?(community college|VCCS|[A-Z])`, `(earned|completed) an associate('s)? degree`
+  - medical condition: `(students?|applicants?) (with|diagnosed with|living with) (diabetes|[^.]{0,30}(disease|disorder|condition))`
+  - Keep the 4-H test case in `conftest.py` in mind: it must still be kept for a student with no affiliations
+    listed, now with a Verify flag.
+- Profile: `StudentProfile.affiliations: list[str]` (free text: parents' employers, clubs, family ties,
+  transfer status) and `no_special_affiliations: bool = False` ("None of these apply to me"). Both local only.
+  Add them to the Profile page under a short explanation.
+- `hard_filter.check` → check name "Specific group":
+  - a normalised token overlap between a restricted-group phrase and an affiliation → `pass`;
+  - `no_special_affiliations` is ticked and there is no overlap → `fail`;
+  - otherwise → `unknown`, `weight="restrictive"`, detail "Only for {phrase}. Add this under Affiliations if it
+    applies to you."
+- `rubric.narrowing` adds "limited to a specific group"; a restrictive unknown multiplies the estimated chance by 0.25.
+
+Tests: one positive and one negative per pattern family; the regression cases for McGuireWoods, Smithfield,
+Universal Leaf, Vaughan, Tribal Match, Faculty-Staff Dependent, VCCS Transfer, Mossberg (USATT), Buzz's Bunch,
+Graham Stedman Neal; `test_unknown_never_excludes` still passes; PII test extended.
+
+## WP4 — Locality, school and out-of-state limits (items 3, 6)
+
+Files: same core files as WP3. `RULES_VERSION` bump.
+
+- **County lists:** capture "A or B counties", "A, B and C Counties", "counties of A and B", "A County" →
+  each as "X County" in `Criteria.localities`. Also "City of X" and "X Public School(s) (system)" →
+  the locality name (matches `p.city` or `p.county`).
+- **High schools:** "senior(s) at X High School", "graduate(s)/graduated from X High School", "attend(s) X High
+  School" → `localities` entry with the full school name (the existing check already compares `p.high_school`).
+  The current Charlotte-only pattern is folded into the general one.
+- **Destination college:** `Criteria.destination_schools: list[str]` from "enrolling at / attending / planning
+  to attend / accepted to X (Community College|College|University)". Check name "College attending": compare
+  with `p.current_school` and `p.intended_schools` (normalised text). No schools on the profile → `unknown`;
+  schools listed and none match → `fail`. Skip this when the row already has `s.school` (Enrollment covers it).
+- **Out-of-state:** `Criteria.non_resident_required: bool` from "out-of-state students", "non-residents of
+  Virginia", "non-Virginia residents". The school's state comes from `config.SCHOOLS[s.school][1]`.
+  `p.state` equals it → `fail`; differs → `pass`; no school state known → `unknown`. An "or" alternative in the
+  same sentence ("out-of-state students or descendants of …") downgrades the fail to a restrictive unknown.
+- Locality check: split on commas and "or" before comparing; require a whole-word match so "Smyth" does not
+  match "Smythe".
+
+Tests: Watson (Northampton / Accomack), Gilbert (Chesapeake Public Schools), Anthony Fox (West Charlotte HS →
+CPCC), Margaret Groseclose Skelton (Smyth County), Moss (Montgomery Co. / Radford HS), O. C. Thompson;
+a student from the named county passes; "preference given to residents of Roanoke County" stays soft
+(existing `women` fixture).
+
+## WP5 — Graduate programs, departments and declared majors (items 4, 7, 8)
+
+Files: `ingest/extract_rules.py` (mostly `FIELDS`, level block, `_MAJOR_TRIGGER`), `hard_filter.py`, `models.py`. `RULES_VERSION` bump.
+
+- **Graduate and professional programs (4):** add `GRADUATE_PROGRAMS` regex: clinical nurse specialist, nurse
+  practitioner, nurse anesthesia, MSN, DNP, physician assistant (studies), school/college of dental
+  medicine, DMD/DDS, college of veterinary medicine, DVM, school of medicine / medical students, MD, PharmD,
+  law school / JD, "Master of …", MBA, MIT (Master of Information Technology, only on VT rows). When it
+  matches a hard sentence or the listing name and the listing does not also name undergraduates, set
+  `levels = ["graduate"]` with the sentence as evidence. "pre-med", "pre-dental", "pre-vet", "pre-PA" must not
+  trigger it.
+- **Departments and colleges (7):**
+  - New fields so the specific unit wins over the broad one: `human development` (child development, family
+    relations, family and consumer science(s), human development and family science), `rehabilitation`
+    (addictions and rehabilitation, rehabilitation counseling/studies), `communication sciences and disorders`,
+    `social work` split from sociology if the test data needs it. Parents as appropriate.
+  - `_MAJOR_TRIGGER` additions: "declared major (in)", "department of", "program in", "<Field> student(s)/majors".
+  - `Criteria.majors_from_unit: bool`: true when the only source of `majors` is a college/department
+    name (`s.college_or_department`, or a "College/School of X" sentence with no "major" wording). In
+    `hard_filter.check`, a `pass` from `field_match` is downgraded to `unknown` ("For students in the College
+    of X; check that your major is in that college"). A `fail` stays a fail.
+  - Pecheles case: "College of Health and Human Sciences" vs a nursing major must come out `unknown` at best.
+- **Declared major / enrolled in the program (8):** `Criteria.declared_major_required: bool` from "declared
+  major in", "admitted to the (College|School) of X", "enrolled in (the )?(nursing|X) (program|major|curriculum)",
+  "accepted into the … program". For `p.level == "hs_senior"`, a "Field of study" `pass` becomes `unknown`
+  ("Requires a declared major in X; incoming students may not qualify yet").
+
+Tests: CNS, Griffin (Dental Medicine), Burevitch PA, IMPACT, MIT Scholars (pass for profile 4, fail for an
+undergraduate), CLAHS Faculty Campaign; Pecheles, Congleton, Westmoreland, Addictions & Rehab, College of
+Science Dean's Roundtable vs a CS student; American Legion #39 and Justin Bryce Clark → unknown for Maya,
+pass for an enrolled nursing undergraduate. Keep `test_field_match_uses_specific_fields_not_groups` and
+`test_rule_majors_keep_the_specific_field` green.
+
+## WP6 — SC CHE programs (item 5)
+
+Files: core rule files, `scrapers/state_aid.py` or `manual_sources/` (HOPE/LIFE supplement), `app.py` (age field). `RULES_VERSION` bump.
+
+- **Age:** `Criteria.min_age: Optional[int]` from "(age )?N (years of age )?or older", "over N", "at least N years
+  old"; also from the listing name ("Residents Over 60"). `StudentProfile.age: Optional[int]`, local only.
+  Check "Age": age given → pass/fail; age missing and `p.level == "hs_senior"` and `min_age >= 25` → `fail`
+  (state the assumption in the detail); otherwise restrictive `unknown`.
+- **Institution type:** `Criteria.institution_types: list[Literal["two_year", "technical", "four_year"]]` from
+  "technical college(s)", "two-year (public|institution)", "community college". Check "Type of college": the
+  schools in `config.SCHOOLS` are four-year; if every school on the profile is one of those → `fail`; if the
+  profile names another school or none → `unknown`.
+- **National Guard:** "member(s) of the (South Carolina )?(Army|Air )?National Guard" → `restricted_groups`
+  entry (WP3 machinery) in addition to the military flag. `p.military_affiliation is False` → `fail`.
+- **Enhancement text:** sentences containing "enhancement" or "additional $… for … majors" are removed from
+  the major-restriction pass. LIFE and Palmetto Fellows must have `majors == []`.
+- **HOPE / LIFE / Palmetto Fellows / Need-based Grant rules (D2):** add `manual_sources/sc_che_rules.csv`
+  (or extend the existing manual format) with the GPA, citizenship and FAFSA requirements typed from the
+  official PDFs, each with the PDF URL as its source. Ingest merges this text into the SC CHE row's
+  `eligibility` so the normal extraction and grounding work. Mark `confidence="medium"`. Ask the user to
+  check the typed values against the PDFs before merging.
+
+Tests: all nine SC CHE rows against round 1 profile 3 and Derek; an SC resident with GPA 3.2 and citizenship
+keeps LIFE and HOPE; a 62-year-old SC resident passes Free Tuition; a technical-college student keeps SC WINS.
+
+## WP7 — Extractor agent learns the new fields
+
+Files: `models.py` (`ExtractedCriteria`), `agents/workers.py` (prompt, `to_criteria`), `agents/supervisor.py`
+(`_HARD_FIELDS`), `tests/conftest.py` (`FakeLLM`), `config.py` (`PROMPT_VERSION` → `p2`).
+
+- Add to `ExtractedCriteria`: `restricted_groups`, `destination_schools`, `non_resident_required`,
+  `declared_major_required`, `min_age`, `institution_types`. Describe each in `EXTRACTOR_SYSTEM`; move
+  "member of 4-H / child of an employee" out of the `soft_criteria` instruction into `restricted_groups`.
+- `to_criteria`: use the LLM value when it is grounded; otherwise keep the rule value. For list fields take
+  the union. Add the new fields to `_HARD_FIELDS` so the grounding gate applies.
+- `FakeLLM` returns the new fields; add one scripted case with an ungrounded `restricted_groups` quote and
+  assert it falls back to the rule value.
+- Keep the "treat as data" and quote rules in the prompt unchanged.
+
+Tests: existing pipeline tests green; new test for the ungrounded fallback; `test_no_pii_reaches_agents` green.
+
+## WP8 — VT re-scrape and manual test round 3 (item 10)
+
+Needs network access, `SCRAPER_CONTACT_EMAIL` and a working LLM endpoint, so do it with the user present.
+
+1. Count title-only rows: `SELECT count(*) FROM scholarships WHERE json_extract(data,'$.extra.detail_fetched') = 0`
+   grouped by source. On this machine it is 49 of 50 VT rows. Re-scrape with
+   `python -m scholarmatch.scrapers.runner --sources vt` (no `--max-details`), then ECU and USC as needed.
+2. Re-export the regression corpus from the real rows (`scripts/export_regression.py`) and replace synthetic lines.
+3. Run `scripts/eval_profiles.py` and record the numbers next to the WP0 baseline.
+4. Repeat the manual test with the seven profiles in the app, once rule-based and once with the LLM on
+   (Anthropic is still untested). Check the **Data & audit** page for `rejected` / `llm_failure` events.
+   Write `docs/manual_test_<date>_round3.md`.
+5. Update `CLAUDE.md`: current state, catalog counts, and whatever is still open.
+
+**Target for round 3:** no clearly ineligible award in any profile's top ten in rule-based mode, and no
+award the notes mark as eligible is excluded.
