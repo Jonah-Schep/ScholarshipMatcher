@@ -14,6 +14,8 @@ def review_mode_label(run: MatchRun) -> str:
     n, m = ai_reviewed_count(run), len(run.results)
     if n > 0:
         return f"AI-reviewed ({n} of {m})"
+    if run.mode == "llm" and m == 0:
+        return "AI review on (nothing passed the rule checks to review)"     # not an outage (WP8)
     if run.mode == "llm":
         return "rule-based (AI review unavailable)"
     return "rule-based"

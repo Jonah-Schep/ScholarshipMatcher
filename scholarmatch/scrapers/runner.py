@@ -34,6 +34,9 @@ def ingest(rows: list[Scholarship]) -> dict:
     for r in supplements.apply_all(rows):  # de-dupe within source on (source, source_id)
         seen[r.key] = r
     rows = list(seen.values())
+    for r in rows:
+        if "aid_type" not in r.extra and scam.is_form(r):
+            r.extra["aid_type"] = "form"          # a survey / release form, not money (WP8)
     verdicts = {r.key: scam.screen(r) for r in rows}
     db.upsert_scholarships(rows, verdicts)
     for r in rows:

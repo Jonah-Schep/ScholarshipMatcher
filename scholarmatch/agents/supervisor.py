@@ -15,7 +15,7 @@ still served from the per-(profile, scholarship) response cache wherever inputs 
 from __future__ import annotations
 
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from .. import config, db
@@ -100,7 +100,10 @@ class Supervisor:
 
             say(f"Agents reviewing scholarships… 0/{len(shortlist)}", 0.1)
             with ThreadPoolExecutor(max_workers=config.LLM_WORKERS) as pool:
-                for out in pool.map(work, shortlist):          # map preserves input order
+                # Count items as they finish (WP8): with map() the bar sat at 0/N while the first item was slow.
+                # Order does not matter here: results and exclusions are sorted below.
+                for fut in as_completed([pool.submit(work, d) for d in shortlist]):
+                    out = fut.result()
                     done += 1
                     say(f"Agents reviewing scholarships… {done}/{len(shortlist)}", 0.1 + 0.85 * done / max(1, len(shortlist)))
                     if isinstance(out, Exclusion):
@@ -148,9 +151,12 @@ class Supervisor:
             result = rubric.build_result(s, c, p, checks, judgement, "llm", flags + score_flags)
             result.filter_verdict = verdict
             return result
-        except LLMError as e:
-            # Fail safe: never lose an eligible scholarship because an agent call failed.
-            self._audit("supervisor", "llm_failure", {"key": s.key, "error": str(e)[:300]})
+        except Exception as e:     # noqa: BLE001 - one item must never end the whole run
+            # Fail safe: never lose an eligible scholarship because an agent call failed. Anything other than an
+            # LLMError is a bug (or, in development, Streamlit re-importing a module mid-run, WP8); it gets its own
+            # audit event so it is not mistaken for a provider outage.
+            event = "llm_failure" if isinstance(e, LLMError) else "item_error"
+            self._audit("supervisor", event, {"key": s.key, "error": f"{type(e).__name__}: {e}"[:300]})
             pre: MatchResult = d["pre"]
             pre.flags.append("An AI review step failed for this item; showing the rule-based score instead.")
             return pre

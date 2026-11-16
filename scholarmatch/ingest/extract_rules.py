@@ -127,7 +127,9 @@ GRADUATE_PROGRAMS = re.compile(
     r"curriculum|class|track)\b"
     rf"|\b(?:pursuing|earning|seeking|enrolled in|admitted to|accepted (?:in)?to|toward|towards)\s+"
     rf"(?:an?\s+|the\s+|their\s+)?{_GRAD_TOKEN}\b", re.I)
-_MIT_VT = re.compile(r"\bMIT\b")          # Master of Information Technology, only on Virginia Tech rows
+# Only on Virginia Tech rows: MIT = Master of Information Technology; VTCSOM = VT Carilion School of Medicine
+# ("incoming VTCSOM students", IMPACT Scholarships, rules-7).
+_MIT_VT = re.compile(r"\bMIT\b|\bVTCSOM\b")
 _PRE_PREFIX = re.compile(r"\bpre-?\s?$", re.I)
 _CAREER_BEFORE = re.compile(r"\b(?:become|becoming|careers?|aspir\w*|goals?|plans? to|planning to|intends? to|"
                             r"intending to|interest(?:ed)? in|will (?:enter|attend|apply)|apply(?:ing)? to|"
@@ -141,7 +143,7 @@ _GRAD_GENERIC = re.compile(r"(?<!under)\bgraduate[- ](?:students?|programs?|degr
                            r"\bmaster'?s\b|\bdoctoral\b|\bph\.?\s?d\b", re.I)
 # AcademicWorks fallback (rows with no level wording at all): "graduate" as a level, not "graduates of" / "graduated
 # from" / "will graduate in May".
-_GRAD_WORD = re.compile(r"(?<!under)\bgraduate\b(?!\s+(?:from|in|with|this|next|by|before|after|on|at|high)\b)", re.I)
+_GRAD_WORD = re.compile(r"(?<!under)\bgraduate\b(?!\s+(?:from|in|with|this|next|by|before|after|on|at|high|during|within|upon)\b)", re.I)
 # Declared major / admitted to the program (item 8).
 _DECLARED_RX = re.compile(
     r"\bdeclared (?:a |an |their |the )?major\b|\bhave declared\b|\bmajor (?:must be|is) declared\b"
@@ -155,16 +157,25 @@ _DECLARED_NOT = re.compile(r"\bnot (?:yet )?(?:declared|admitted|accepted|enroll
 _RISING = re.compile(r"\brising (sophomore|junior|senior)s?\b", re.I)
 _YEAR_BELOW = {"sophomore": "freshman", "junior": "sophomore", "senior": "junior"}
 _PREF = re.compile(r"\bprefer|\bpriority\b|\bconsideration (will be|is) given|\bmay be given\b|\bdesirable\b|\bencouraged\b", re.I)
+# "…at least a 3.0 GPA, … with preference to children of X" (Cobb): the clause before the marker is still a rule,
+# so it is kept as a hard sentence (rules-7). Only markers that introduce what follows split a sentence; "nursing
+# students are preferred" stays wholly soft.
+_PREF_SPLIT = re.compile(r"[,;]?\s*\b(?:with|and|but|giving)\s+(?:a\s+|special\s+)?(?:preference|priority)\b|"
+                         r"[,;]\s*(?:preference|priority) (?:will be|is|may be|shall be) given\b", re.I)
 _SOFT = re.compile(r"leadership|community service|volunteer|extracurricular|involve(d|ment)|commitment to|"
                    r"interest in|passion|demonstrat\w+ (a |an )?(interest|commitment|leadership|character)|"
                    r"participat\w+|character|work ethic|career goal|aspir", re.I)
 # --- awards limited to a specific group (WP3). Only hard sentences are searched, so "preference given to children
 # of employees" stays soft. `(?-i:[A-Z])` requires a capitalised proper name even though the patterns run with re.I,
 # which keeps "members of the community" / "transfer students from any college" out.
-_GROUP_FAMILY = r"(?:child(?:ren)?|sons? (?:and|or) daughters?|dependents?|spouses?)"
+# "dependent children or dependent grandchildren of a current … employee" (Smithfield, rules-7)
+_GROUP_FAMILY = r"(?:(?:dependent |legal )?(?:grand)?child(?:ren)?|sons? (?:and|or) daughters?|dependents?|spouses?)"
 GROUP_PATTERNS: dict[str, str] = {
     "family": rf"\b{_GROUP_FAMILY}(?: (?:and|or) {_GROUP_FAMILY})? of [^.;]{{0,60}}?"
-              r"\b(?:employees?|staff|faculty|associates|members|growers|farmers)\b",
+              r"\b(?:employees?|staff|faculty|associates|members|growers|farmers)\b"
+              # "students who have a parent, grandparent, or legal guardian employed by or retired from X" (rules-7)
+              r"|\b(?:ha(?:ve|s)|with) an? (?:parent|grandparent|guardian|legal guardian|relative|family member)\b"
+              r"[^.;]{0,60}?\b(?:employed (?:by|at|with)|work(?:s|ing)? (?:for|at)|retired from)\b",
     "descendants": r"\b(?:direct |lineal |documented )?descendants? of\b",
     "membership": r"\b(?:an? |active |current )?members? of (?:an? |the )?"
                   r"(?!(?:community|graduating|class|public|student body|team|household|family)\b)(?-i:[A-Z0-9])"
@@ -177,11 +188,14 @@ GROUP_PATTERNS: dict[str, str] = {
     "award holders": r"\brecipients? of (?:a|an|the) (?!scholarship\b)[^.;]{1,60}?\bscholarship\b"
                      r"|\breceiving an? (?!scholarship\b)[^.;]{1,40}?\bscholarship\b"
                      r"|\bcompleted (?:a|an|the) [^.;]{0,60}?\b(?:co-?op|internship)\b(?: program\b)?"
-                     r"|\bregistered with (?:the )?Services for Students with Disabilities\b",
+                     r"|\b(?:registered with|connected (?:with|to)|recognized [^.;]{0,40}?\bby) (?:the )?Services for "
+                     r"Students with Disabilities\b",
     "transfer": r"\btransfer(?:ring)? (?:students? )?from (?:a |the )?(?:community college|VCCS|(?-i:[A-Z]))"
-                r"|\b(?:earned|completed) an associate(?:'s|’s)? degree\b",
-    "medical condition": r"\b(?:students?|applicants?) (?:with|diagnosed with|living with) "
-                         r"(?:diabetes|[^.;]{0,30}?\b(?:disease|disorder|condition)s?\b)",
+                r"|\b(?:earned|completed) an associate(?:'s|’s)? degree\b"
+                # "transferring to Virginia Tech after completion of an associate degree" (VT-VCCS, rules-7)
+                r"|\btransferring to [^.;]{0,40}?\bafter (?:the )?(?:completion of|completing|earning) an associate",
+    "medical condition": r"\b(?:students?|applicants?)(?: whose lives have been)? (?:with|diagnosed with|living with|"
+                         r"impacted by|affected by) (?:type [12] )?(?:diabetes|[^.;]{0,30}?\b(?:disease|disorder|condition)s?\b)",
 }
 _GROUP_RX = {k: re.compile(v, re.I) for k, v in GROUP_PATTERNS.items()}
 _GROUP_NEGATION = re.compile(r"\b(?:not eligible|ineligible|may not apply|cannot apply|are excluded|is excluded)\b", re.I)
@@ -632,8 +646,16 @@ def extract(s: Scholarship) -> Criteria:
     c = Criteria(requirements=Requirements())
     ev = c.evidence
     hard, soft = [], []
-    for sent in sentences(text):
-        (soft if _PREF.search(sent) else hard).append(sent)
+    # Eligibility comes from the listing only: supplemental questions are asked of the applicant (rules-7).
+    for sent in sentences(s.full_text(questions=False)):
+        if not _PREF.search(sent):
+            hard.append(sent)
+            continue
+        soft.append(sent)
+        cut = _PREF_SPLIT.search(sent)
+        head = sent[:cut.start()].strip() if cut else ""
+        if len(head) >= 30 and not _PREF.search(head):
+            hard.append(head)
 
     def first(rx: str, flags=re.I):
         for sent in hard:
@@ -688,12 +710,13 @@ def extract(s: Scholarship) -> Criteria:
     # page it means a high-school senior.
     college_portal = s.source.startswith("academicworks_")
     college_grad_senior = college_portal and re.search(r"graduating seniors?\b(?! (are|is) not eligible)", low_hard) and "high school" not in low_hard
-    hs_rx = r"high school (senior|student|graduat)|incoming (freshm[ae]n|first[- ]year)|entering freshm[ae]n"
+    hs_rx = r"high school (senior|student|graduat)|incoming (freshm[ae]n|first[- ]year|undergraduates?)|entering freshm[ae]n"
     if not college_portal:
         hs_rx += r"|graduating senior"
     if re.search(hs_rx, low_hard):
         c.levels.append("hs_senior")
-    if college_grad_senior or re.search(r"undergraduate|sophomore|junior\b|rising (sophomore|junior|senior)|currently enrolled|current(ly)? (college )?student|full[- ]time student", low_hard):
+    # "incoming undergraduate students" are new students, not current ones (Merryman, rules-7)
+    if college_grad_senior or re.search(r"(?<!incoming )undergraduate|sophomore|junior\b|rising (sophomore|junior|senior)|currently enrolled|current(ly)? (college )?student|full[- ]time student", low_hard):
         c.levels.append("undergrad")
     if _GRAD_GENERIC.search(low_hard):
         c.levels.append("graduate")
@@ -720,7 +743,10 @@ def extract(s: Scholarship) -> Criteria:
         ev["class_years"] = next((x for x in hard if re.search(r"\b(?:freshm[ae]n|sophomores?|juniors?|seniors?)\b",
                                                                 x, re.I)), "")
     if s.source.startswith("academicworks_") and not c.levels:
-        c.levels = ["undergrad", "graduate"] if _GRAD_WORD.search(low_hard) else []
+        if c.class_years:                     # "Senior Co-op student" (C.T. Tate): a college year is undergrad (rules-7)
+            c.levels = ["undergrad"]
+        else:
+            c.levels = ["undergrad", "graduate"] if _GRAD_WORD.search(low_hard) else []
 
     # --- majors (only in restrictive sentences). A field named as the major wins; a College/School/Department name
     # next to it is context ("College of Engineering" + "majoring in Computer Engineering"). When the unit is the only
@@ -776,9 +802,11 @@ def extract(s: Scholarship) -> Criteria:
         if m:
             c.ethnicities.append(label)
             ev.setdefault("ethnicities", sent)
-    flag("disability_required", r"(student|applicant|individual)s? with (a )?(documented |physical |learning )?disabilit|must have a (documented )?disabilit")
+    # "If you are an individual with a disability and desire an accommodation" is an access notice (Cloyd, rules-7)
+    flag("disability_required", r"^(?!.*accommodat).*?(student|applicant|individual)s? with (a )?(documented |physical |learning )?disabilit|must have a (documented )?disabilit")
     flag("first_generation_required", r"first[- ]generation")
-    flag("military_affiliation_required", r"\bveterans?\b|military (service|dependent|famil)|active[- ]duty|corps of cadets|\brotc\b|national guard|(child|children|dependent|spouse)s? of (a )?(veteran|service ?member)")
+    # "receipt of veterans' benefits … may affect the amount" (VT-VCCS Transfer) is a note, not a limit (rules-7)
+    flag("military_affiliation_required", r"\bveterans?\b(?!['’]?s?['’]? (?:education )?benefits)|military (service|dependent|famil)|active[- ]duty|corps of cadets|\brotc\b|national guard|(child|children|dependent|spouse)s? of (a )?(veteran|service ?member)")
     flag("us_citizen_or_resident_required", r"u\.?s\.? citizen|united states citizen|permanent resident|citizenship")
     c.restricted_groups, group_ev = restricted_groups(hard, s.name)
     if c.restricted_groups:

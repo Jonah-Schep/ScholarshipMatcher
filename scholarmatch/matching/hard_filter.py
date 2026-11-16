@@ -16,7 +16,7 @@ from ..ingest.extract_rules import (STATE_NAMES, field_match, locality_has_alter
 from ..models import Criteria, HardCheck, Scholarship, StudentProfile
 from ..textutil import norm
 
-EXCLUDED_AID_TYPES = ("loan", "forgivable_loan", "loan_repayment", "reimbursement", "fiscal_agent")
+EXCLUDED_AID_TYPES = ("loan", "forgivable_loan", "loan_repayment", "reimbursement", "fiscal_agent", "form")
 _URM = {"Black / African American", "Hispanic / Latino", "Native American"}
 
 
@@ -34,7 +34,7 @@ def sql_stage(p: StudentProfile, as_of: str) -> tuple[list[dict], dict[str, int]
         CASE
           WHEN s.scam_level = 'block' THEN 'flagged as scam/spam'
           WHEN s.status = 'ended' OR (s.deadline IS NOT NULL AND s.deadline < ?) THEN 'deadline passed'
-          WHEN s.aid_type IN ({aid}) THEN 'loan or reimbursement, not a scholarship'
+          WHEN s.aid_type IN ({aid}) THEN 'loan, reimbursement or form, not a scholarship'
           WHEN s.school IS NOT NULL AND s.school NOT IN ({marks}) THEN 'for students of a school not on your list'
           WHEN s.school IS NULL AND s.geo_scope NOT IN ('national', 'multi_state', ?) THEN 'restricted to another state'
           WHEN c.min_gpa IS NOT NULL AND ? IS NOT NULL AND c.min_gpa > ? THEN 'GPA below stated minimum'

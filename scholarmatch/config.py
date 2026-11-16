@@ -26,15 +26,18 @@ SCHOOLS = {  # AcademicWorks portals we scrape -> display name, state
 }
 
 # --- Versions: bump when prompts / rules change so caches invalidate cleanly ---
-RULES_VERSION = "rules-6"
+RULES_VERSION = "rules-7"
 PROMPT_VERSION = "p2"
-RUBRIC_VERSION = "rubric-5"
+RUBRIC_VERSION = "rubric-6"
 
 # --- Pipeline knobs (all deterministic) --------------------------------------
 MAX_LLM_CANDIDATES = int(os.environ.get("SM_MAX_LLM_CANDIDATES", 30))  # cost cap per run
 MAX_RESULTS = int(os.environ.get("SM_MAX_RESULTS", 15))                # shown to student
 MAX_SUPERVISOR_ROUNDS = 2      # worker retries before the supervisor fails safe
 LLM_WORKERS = int(os.environ.get("SM_LLM_WORKERS", 6))
+# Provider calls in flight at once across ALL runs in this process (two users matching at the same time share it).
+# VT ARC answers "429 concurrent session limit … max 10 in flight per user" above 10 (WP8, 2026-11-14).
+LLM_MAX_INFLIGHT = int(os.environ.get("SM_LLM_MAX_INFLIGHT", 6))
 CHAT_KEEP_TURNS = 8            # recent turns kept verbatim; older ones are compacted
 
 # --- LLM ---------------------------------------------------------------------

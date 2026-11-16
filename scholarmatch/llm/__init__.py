@@ -22,6 +22,19 @@ class LLMError(RuntimeError):
     """Any failure to get a usable answer (network, refusal, truncation, bad JSON)."""
 
 
+_INFLIGHT: Optional[threading.BoundedSemaphore] = None
+_INFLIGHT_GUARD = threading.Lock()
+
+
+def _inflight() -> threading.BoundedSemaphore:
+    """One limit on provider calls for the whole process, shared by every LLM object and run."""
+    global _INFLIGHT
+    with _INFLIGHT_GUARD:
+        if _INFLIGHT is None:
+            _INFLIGHT = threading.BoundedSemaphore(max(1, config.LLM_MAX_INFLIGHT))
+        return _INFLIGHT
+
+
 class LLM:
     name = "base"
     available = True
@@ -54,7 +67,8 @@ class LLM:
                     return out
                 except ValidationError:
                     pass  # schema changed since it was cached: recompute
-        out, tin, tout = self._structured(role, system, user, schema)
+        with _inflight():
+            out, tin, tout = self._structured(role, system, user, schema)
         db.cache_put(key, role, self.model(role), out.model_dump_json(), tin, tout)
         self._count(calls=1, input_tokens=tin, output_tokens=tout)
         return out
@@ -63,7 +77,8 @@ class LLM:
              tools: Optional[list[dict]] = None,
              run_tool: Optional[Callable[[str, dict], str]] = None) -> str:
         self._count(calls=1)
-        return self._chat(role, system, messages, tools, run_tool)
+        with _inflight():
+            return self._chat(role, system, messages, tools, run_tool)
 
     def _count(self, **kw: int) -> None:
         with self._lock:

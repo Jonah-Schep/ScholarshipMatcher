@@ -46,11 +46,14 @@ class Scholarship(BaseModel):
     def key(self) -> str:
         return f"{self.source}:{self.source_id}"
 
-    def full_text(self) -> str:
-        """The only text agents may quote from (grounding source)."""
+    def full_text(self, questions: bool = True) -> str:
+        """The only text agents may quote from (grounding source).
+
+        `questions=False` leaves out the application's supplemental questions: they are asked of the applicant
+        ("…Internship Program for rising Seniors?"), so rule extraction must not read them as eligibility limits."""
         parts = [self.name, self.description, self.eligibility]
         q = self.extra.get("supplemental_questions")
-        if q:
+        if q and questions:
             parts.append("Supplemental questions: " + " | ".join(q))
         if not (self.description or self.eligibility):
             parts.append(self.raw_text)

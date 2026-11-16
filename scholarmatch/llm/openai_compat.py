@@ -8,11 +8,31 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Callable, Optional, Type
 
 from pydantic import ValidationError
 
 from . import LLM, LLMError, T
+
+
+BACKOFF_SECONDS = (5.0, 10.0, 20.0)
+
+
+def _retryable() -> tuple[type[BaseException], ...]:
+    """Answers worth waiting out: 429 (too many requests in flight) and 5xx ("backend unavailable")."""
+    from openai import InternalServerError, RateLimitError
+    return (RateLimitError, InternalServerError)
+
+
+def call_with_backoff(call, retryable: tuple[type[BaseException], ...], pauses=BACKOFF_SECONDS, sleep=time.sleep):
+    """Run `call`, retrying `retryable` errors after each pause in `pauses`; other errors (timeouts) are raised."""
+    for pause in pauses:
+        try:
+            return call()
+        except retryable:
+            sleep(pause)
+    return call()
 
 
 class OpenAICompatLLM(LLM):
@@ -25,9 +45,15 @@ class OpenAICompatLLM(LLM):
         self._model = os.environ.get("SM_OPENAI_MODEL", "")
         if not self._model:
             raise RuntimeError("Set SM_OPENAI_MODEL for the openai_compat provider.")
+        # No SDK retries (WP8): on a timeout the server is usually still working, so a retry only adds a second
+        # request in flight (VT ARC allows 10 per user, then 429). `_create` retries busy / rate-limit answers
+        # itself, with longer pauses; a timeout fails the item, which then falls back to the rule-based score.
         self.client = OpenAI(base_url=os.environ.get("SM_OPENAI_BASE_URL") or None,
                              api_key=os.environ.get("SM_OPENAI_API_KEY") or "none",
-                             max_retries=4, timeout=120.0)
+                             max_retries=0, timeout=float(os.environ.get("SM_OPENAI_TIMEOUT", 300)))
+
+    def _create(self, **kw):
+        return call_with_backoff(lambda: self.client.chat.completions.create(**kw), _retryable())
 
     def model(self, role: str) -> str:
         return os.environ.get(f"SM_MODEL_{role.upper()}") or self._model
@@ -39,7 +65,7 @@ class OpenAICompatLLM(LLM):
         last_err = ""
         for _attempt in range(2):
             try:
-                resp = self.client.chat.completions.create(
+                resp = self._create(
                     model=self.model(role), temperature=0, seed=7,
                     response_format={"type": "json_object"},
                     messages=[{"role": "system", "content": sys_prompt},
@@ -59,7 +85,7 @@ class OpenAICompatLLM(LLM):
               tools: Optional[list[dict]], run_tool: Optional[Callable[[str, dict], str]]) -> str:
         # No tool loop on this provider: the chat agent injects its context up front instead.
         try:
-            resp = self.client.chat.completions.create(
+            resp = self._create(
                 model=self.model(role), temperature=0, seed=7,
                 messages=[{"role": "system", "content": system}, *messages])
         except Exception as e:

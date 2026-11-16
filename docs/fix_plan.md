@@ -18,7 +18,7 @@ ends in one branch and one pull request.
 | WP5 Graduate programs, departments, declared majors | 4, 7, 8 | WP4 | done (2026-11-12) | `fix/still-to-fix` | `rules-5` (no rubric change); all 12 WP5 xfails fixed; Garris `expect` unknown → pass; WP4/WP0 carry-overs done; remaining xfails WP6 10; see "WP5 notes" |
 | WP6 SC CHE programs | 5 | WP5 | done except supplement values (2026-11-12) | `fix/still-to-fix` | `rules-6` (no rubric change); 6 of 10 WP6 xfails fixed; 4 "WP6-supplement" xfails wait on the user typing citizenship from the PDFs into `manual_sources/supplements/sc_che.csv`; `extract` no longer quadratic; Age field not checked in the running app; see "WP6 notes" |
 | WP7 Extractor agent learns the new fields | LLM parity | WP6 | done (2026-11-12) | `fix/still-to-fix` | `p2` (no rules or rubric change); merge policy covers every hard field; `from_rules`; live path not run (no network); see "WP7 notes" |
-| WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | todo | | needs network + the user |
+| WP8 VT re-scrape and manual test round 3 | 10, final check | WP7 | done (2026-11-14) | `fix/wp8-round3` | `rules-7`, `rubric-6`; all open VT rows have detail pages; 47 corpus rows now real; LLM run live on VT ARC; see "WP8 notes" and `docs/manual_test_2026-11-14_round3.md` |
 
 Status values: `todo`, `in progress (date)`, `done (date)`, `blocked (reason)`.
 
@@ -927,3 +927,31 @@ Needs network access, `SCRAPER_CONTACT_EMAIL` and a working LLM endpoint, so do 
 
 **Target for round 3:** no clearly ineligible award in any profile's top ten in rule-based mode, and no
 award the notes mark as eligible is excluded.
+
+### WP8 notes (2026-11-14)
+- **Scrape.** `--sources vt` without `--max-details`: every open / unknown VT row has its detail page; the 91 title-only
+  rows are all ended (skipped unless `--include-ended`). Item 10 closed.
+- **Corpus.** `export_regression.py --db data/scholarmatch.db` replaced 47 synthetic VT rows with real text (20 ECU / USC
+  / Charlotte rows stay synthetic: not in this catalog). Four Aisha expectations changed because the real text differs
+  from the paraphrase (Thompson → fail Residency; Cobb, Cloyd, Adam Ward → unknown). XFAIL list unchanged (4 supplement).
+- **Rules (`rules-7`).** Supplemental questions no longer feed rule extraction; preference-sentence split; new group
+  wording (dependent grandchildren, "have a parent … employed by", transfer after an associate degree, SSD
+  "recognized … by", "impacted by type 1 diabetes"); veterans'-benefits note and accessibility notice no longer set
+  Military / Disability; "incoming undergraduate" → new students; "Graduate during…" and a named college year →
+  undergrad; VTCSOM → graduate on VT rows. Unit tests at the end of `test_units.py`.
+- **Ranking (`rubric-6`).** A restrictive unknown caps certainty at 30%. Aisha's rule-based top ten on the real catalog:
+  3 known-ineligible → 0 (1 since the corpus refresh added Faculty-Staff Dependent as a known case).
+- **Live LLM (VT ARC).** Works, but slow: Extractor answers are 1,400–2,500 tokens and take 20–60 s, so a 30-item run
+  takes 10–15 min. ARC allows 10 calls in flight per user (429 above). Fixed: process-wide `SM_LLM_MAX_INFLIGHT` (6);
+  `openai_compat` no longer retries timeouts (each retry was a second request in flight) and backs off 5/10/20 s on
+  429 / 5xx; `SM_OPENAI_TIMEOUT` (300 s). Per-item errors of any kind fall back to rules (`item_error`).
+- **Survey forms.** `ingest/scam.is_form` tags "VT News Survey and FERPA Release"-style rows `aid_type = "form"`; the SQL
+  stage drops them with loans.
+- **Open (not fixed).** (1) WP7 list union: the Extractor added `undergrad` to Merryman's `levels`, which re-admits
+  current students that the rule (`hs_senior` from "incoming undergraduate") excluded; the union cannot remove a wrong
+  widening. Needs a merge-policy decision for `levels`. (2) IMPACT (VTCSOM, MD) passes for a vet-med graduate student.
+  (3) A group check passes only on a distinctive shared word: "Daughter of a Virginia Tech staff member" does not pass
+  "dependents of … staff or faculty employed" (phrase cut before "by Virginia Tech"). (4) Anthropic provider still
+  untested. (5) The supplement values (HOPE / LIFE / Palmetto / Need-based) still wait on the user; Palmetto Fellows
+  passes for a 64-year-old freshman until then. (6) No live NC rows on the Windows catalog.
+

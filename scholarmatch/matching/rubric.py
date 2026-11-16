@@ -131,6 +131,11 @@ def eligibility_certainty(s: Scholarship, c: Criteria, checks: list[HardCheck]) 
     certainty = NO_CHECKS_CERTAINTY if n == 0 else (passed + 0.5 * normal_unknown) / n
     if level in CERTAINTY_CAP:
         certainty = min(certainty, CERTAINTY_CAP[level])
+    restrictive = len(unknown) - normal_unknown
+    if restrictive:
+        # An unconfirmed group limit ("children of Smithfield employees") is at least as doubtful as a listing with
+        # no details, so it gets the same cap; otherwise it outranks open awards with thin listings (rubric-6).
+        certainty = min(certainty, CERTAINTY_CAP["none"])
     if level == "none":
         why = "The listing gives no eligibility details; open the link to check who can apply."
     elif level == "thin":

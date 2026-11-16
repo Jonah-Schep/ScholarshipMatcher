@@ -235,10 +235,11 @@ def test_restrictive_unknown_counts_zero_and_cuts_chance():
     restrictive = [normal[0], normal[1].model_copy(update={"weight": "restrictive"})]
     a = rubric.build_result(s, c, p, normal, j, "heuristic")
     b = rubric.build_result(s, c, p, restrictive, j, "heuristic")
-    assert _certainty(a).rating == "75%" and _certainty(b).rating == "50%"
+    # rubric-6: an unconfirmed group limit is capped like a listing with no details (30%), not the 50% ratio
+    assert _certainty(a).rating == "75%" and _certainty(b).rating == "30%"
     assert "specific group" in _certainty(b).why
-    # chance: certainty effect (0.75 vs 0.875) times the 0.25 restrictive factor
-    expected = a.win_probability * (0.5 + 0.5 * 0.5) / (0.5 + 0.5 * 0.75) * rubric.RESTRICTIVE_CHANCE_FACTOR
+    # chance: certainty effect (0.65 vs 0.875) times the 0.25 restrictive factor
+    expected = a.win_probability * (0.5 + 0.5 * 0.3) / (0.5 + 0.5 * 0.75) * rubric.RESTRICTIVE_CHANCE_FACTOR
     assert abs(b.win_probability - max(0.005, expected)) <= 0.002
     assert b.match_score < a.match_score
     assert any(f.startswith("Verify — Specific group") for f in b.flags)
@@ -1057,3 +1058,157 @@ def test_extractor_schema_and_prompt_cover_the_new_fields():
     assert _QUOTE_RULE in EXTRACTOR_SYSTEM and _QUOTE_RULE in FILTER_SYSTEM
     assert 'When in doubt choose "uncertain"' in FILTER_SYSTEM and "restricted_groups" in FILTER_SYSTEM
     assert config.PROMPT_VERSION == "p2"
+
+
+# --- WP8 / rules-7: cases found on the real VT listings (re-scrape 2026-11-14) -----------------------------------
+def _aw(sid, name, desc, questions=(), **kw):
+    return sch(sid, name, desc, source="academicworks_vt", school="vt", geo_scope="va",
+               extra={"supplemental_questions": list(questions), "detail_fetched": True}, **kw)
+
+
+def test_supplemental_questions_are_not_eligibility_rules():
+    s = _aw("q", "Smithfield Foundation Scholarship",
+            "Available for students who are dependent children or dependent grandchildren of a current full-time or "
+            "retired employee of Smithfield Foods who also exhibit academic achievement.",
+            ["Are you interested in learning more about Smithfield Foods Summer Internship Program for rising Seniors?"])
+    c = extract_rules.extract(s)
+    assert c.class_years == [] and c.levels == []
+    assert c.restricted_groups and "dependent children" in c.restricted_groups[0]
+    assert "rising Seniors" in s.full_text() and "rising Seniors" not in s.full_text(questions=False)
+
+
+def test_parent_employed_by_wording_is_a_group_limit():
+    c = extract_rules.extract(_aw("m", "Merryman Public Pupil Transportation (School Bus) Scholarship",
+        "A one-time scholarship awarded to incoming undergraduate students who have a parent, grandparent, or legal "
+        "guardian employed by or retired from a Virginia public school pupil transportation operation."))
+    assert c.restricted_groups and c.levels == ["hs_senior"]
+
+
+def test_transfer_after_associate_degree_and_veterans_benefits_note():
+    c = extract_rules.extract(_aw("v", "VCCS Transfer Achievement Scholarship",
+        "Provides financial assistance to full time undergraduate students transferring to Virginia Tech after "
+        "completion of an associate degree at a Virginia Community College System institution. Notes: Receipt of "
+        "veterans’ benefits may affect the amount of the scholarship."))
+    assert any("transferring" in g for g in c.restricted_groups)
+    assert c.military_affiliation_required is None
+
+
+def test_clause_before_with_preference_is_still_a_rule():
+    c = extract_rules.extract(_aw("c", "Cobb Office Products, Inc. Scholarship",
+        "A merit based scholarship awarded to students based on academic achievement of at least a 3.0 GPA, "
+        "extracurricular leadership and community service with preference to children of employees of Cobb."))
+    assert c.min_gpa == 3.0
+    assert c.restricted_groups == []                      # the preference part stays soft
+    soft = extract_rules.extract(_aw("n", "Nursing Award", "Nursing students are preferred. Open to all majors."))
+    assert soft.majors == []
+
+
+def test_graduate_during_the_year_and_named_college_year_mean_undergrad():
+    c = extract_rules.extract(_aw("t", "C.T. Tate Distinguished Co-op Senior Award",
+        "Be a Senior Co-op student in good standing. Graduate during the academic year in which the award is presented."))
+    assert c.levels == ["undergrad"] and c.class_years == ["senior"]
+
+
+def test_ssd_diabetes_and_accommodation_notice():
+    ssd = extract_rules.extract(_aw("b", "Buzz's Bunch Scholarship",
+        "The applicant must be recognized as a student with a disability by Services for Students with Disabilities."))
+    assert ssd.restricted_groups
+    dia = extract_rules.extract(_aw("g", "Graham Stedman Neal Diabetes Fund",
+        "Provides support for students whose lives have been impacted by type 1 diabetes, type 2 diabetes, or other "
+        "autoimmune diseases."))
+    assert dia.restricted_groups
+    note = extract_rules.extract(_aw("a", "Austin Michelle Cloyd Social Justice Scholarship",
+        "All current undergraduate and graduate students are invited to apply. If you are an individual with a "
+        "disability and desire an accommodation, welcome!"))
+    assert note.disability_required is None
+
+
+def test_vtcsom_is_medical_school_on_vt_rows_only():
+    text = "Awarded to up to 5 talented incoming VTCSOM students annually."
+    assert extract_rules.extract(_aw("i", "IMPACT Scholarships", text)).levels == ["graduate"]
+    assert "graduate" not in extract_rules.extract(sch("i2", "IMPACT", text)).levels
+
+
+def test_provider_calls_in_flight_are_capped_across_llm_objects(monkeypatch):
+    """VT ARC rejects more than 10 calls in flight per user (429). One cap covers every run in the process (WP8)."""
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from pydantic import BaseModel
+    from scholarmatch import config
+    from scholarmatch import llm as llm_mod
+
+    class Out(BaseModel):
+        n: int
+
+    state = {"now": 0, "peak": 0}
+    guard = threading.Lock()
+
+    class SlowLLM(llm_mod.LLM):
+        name = "slow"
+
+        def _structured(self, role, system, user, schema):
+            with guard:
+                state["now"] += 1
+                state["peak"] = max(state["peak"], state["now"])
+            time.sleep(0.05)
+            with guard:
+                state["now"] -= 1
+            return schema(n=1), 1, 1
+
+    monkeypatch.setattr(config, "LLM_MAX_INFLIGHT", 2)
+    monkeypatch.setattr(llm_mod, "_INFLIGHT", None)
+    monkeypatch.setattr(llm_mod.db, "cache_put", lambda *a, **k: None)   # 8 threads writing SQLite is not the point
+    a, b = SlowLLM(), SlowLLM()                      # two runs, one shared limit
+    with ThreadPoolExecutor(8) as pool:
+        list(pool.map(lambda i: (a if i % 2 else b).structured("x", "s", f"u{i}", Out, use_cache=False), range(12)))
+    assert state["peak"] == 2
+
+
+def test_openai_compat_backoff_retries_busy_answers_only():
+    """WP8: 429 / 5xx are waited out; a timeout is not retried (the server is still working on the first request)."""
+    from scholarmatch.llm.openai_compat import call_with_backoff
+
+    class Busy(Exception):
+        pass
+
+    class Timeout(Exception):
+        pass
+
+    slept, calls = [], {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Busy()
+        return "ok"
+
+    assert call_with_backoff(flaky, (Busy,), pauses=(1, 2, 3), sleep=slept.append) == "ok" and slept == [1, 2]
+
+    def slow():
+        calls["n"] += 1
+        raise Timeout()
+
+    calls["n"], slept[:] = 0, []
+    try:
+        call_with_backoff(slow, (Busy,), pauses=(1, 2), sleep=slept.append)
+    except Timeout:
+        pass
+    assert calls["n"] == 1 and slept == []
+
+
+def test_survey_and_release_forms_are_not_scholarships(tmp_db):
+    """WP8: "VT News Survey and FERPA Release" ranked #10 for a student; it is an interview sign-up form."""
+    from scholarmatch import db
+    from scholarmatch.ingest import scam
+    from scholarmatch.matching import hard_filter
+    from scholarmatch.models import StudentProfile
+    from scholarmatch.scrapers.runner import ingest
+    form = _aw("f", "VT News Survey and FERPA Release",
+               "(This application is a survey to express interest in being interviewed for a news story.)")
+    real = _aw("r", "Survey Engineering Scholarship", "For students in the land surveying program.")
+    assert scam.is_form(form) and not scam.is_form(real)
+    ingest([form, real])
+    rows, counts = hard_filter.sql_stage(StudentProfile(profile_id="x", state="VA", intended_schools=["vt"]), "2026-11-14")
+    assert [r["scholarship"].name for r in rows] == ["Survey Engineering Scholarship"]
+    assert counts == {"loan, reimbursement or form, not a scholarship": 1}

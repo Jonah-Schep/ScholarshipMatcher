@@ -25,7 +25,7 @@ def test_hard_filter_is_deterministic_and_explained(catalog, profile):
     assert run.mode == "heuristic"
     assert set(keys(run)) == {"test:svc", "test:women", "test:4h", "academicworks_vt:vt1", "test:open"}
     assert run.stats["sql_excluded"] == {
-        "flagged as scam/spam": 1, "deadline passed": 1, "loan or reimbursement, not a scholarship": 1,
+        "flagged as scam/spam": 1, "deadline passed": 1, "loan, reimbursement or form, not a scholarship": 1,
         "for students of a school not on your list": 1, "restricted to another state": 1,
         "GPA below stated minimum": 1}
     for r in run.results:
@@ -174,6 +174,8 @@ def test_run_header_labels_for_working_and_offline_runs(catalog, profile):
     partial = ok.model_copy(update={"results": [ok.results[0].model_copy(update={"mode": "heuristic"}), *ok.results[1:]]})
     assert review_mode_label(partial) == f"AI-reviewed ({n - 1} of {n})"
     assert review_mode_label(Supervisor(OfflineLLM()).run(profile, AS_OF)) == "rule-based"
+    empty = ok.model_copy(update={"results": []})            # WP8: no candidates is not an AI outage
+    assert review_mode_label(empty) == "AI review on (nothing passed the rule checks to review)"
 
 
 def test_progress_reports_agent_stage_before_first_item_finishes(catalog, profile):
@@ -275,3 +277,17 @@ def test_rule_locality_survives_when_extractor_returns_none(profile):
     run = Supervisor(FakeLLM()).run(profile.model_copy(update={"county": "Northampton"}), AS_OF)
     r = get(run, "test:watson")
     assert r.mode == "llm" and next(h for h in r.hard_checks if h.name == "Locality").result == "pass"
+
+
+class ScorerBugLLM(FakeLLM):
+    def _structured(self, role, system, user, schema):
+        if schema is ScoreJudgement:
+            raise KeyError("unexpected bug")
+        return super()._structured(role, system, user, schema)
+
+
+def test_unexpected_error_in_one_item_does_not_end_the_run(catalog, profile):
+    """WP8: in the live app an error escaped one item and replaced the whole page with a traceback."""
+    run = Supervisor(ScorerBugLLM()).run(profile, AS_OF)
+    assert run.results and all(r.mode == "heuristic" for r in run.results)
+    assert all(any("AI review step failed" in f for f in r.flags) for r in run.results)

@@ -49,3 +49,14 @@ def screen(s: Scholarship) -> tuple[str, list[str]]:
     if block or warn:
         return "warn", block + warn
     return "ok", []
+
+
+# --- not a scholarship at all (WP8): AcademicWorks portals also host forms, e.g. "VT News Survey and FERPA Release"
+# ("This application is a survey to express interest in being interviewed for a news story"). They carry no money,
+# so they are tagged aid_type "form" and the SQL stage drops them like loans. Kept narrow on purpose.
+_FORM = re.compile(r"\bthis application is (?:a|only a) (?:survey|form)\b|\b(?:news|media) survey\b|\bFERPA release\b",
+                   re.I)
+
+
+def is_form(s: Scholarship) -> bool:
+    return bool(_FORM.search(f"{s.name}\n{s.description}"))
