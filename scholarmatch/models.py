@@ -6,6 +6,7 @@ in matching/rubric.py from these contracts.
 """
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -124,6 +125,13 @@ class Essay(BaseModel):
     themes: list[str] = Field(default_factory=list)   # derived once; only themes go to match agents
 
 
+_ESSAY_LABEL = re.compile(r"\bEssay (\d{1,2})\b")
+
+
+def essay_label(i: int) -> str:
+    return f"Essay {i + 1}"
+
+
 class StudentProfile(BaseModel):
     profile_id: str                       # local handle, e.g. "jonah"
     display_name: str = ""
@@ -169,8 +177,17 @@ class StudentProfile(BaseModel):
             "level": self.level, "class_year": self.class_year, "state": self.state,
             "majors": self.majors, "activities": self.activities, "interests": self.interests,
             "awards_won": self.awards_won,
-            "essay_themes": [{"title": e.title, "themes": e.themes} for e in self.essays],
+            # Agents see essays as "Essay 1", "Essay 2": a file name such as "Priya_robotics_essay.txt" can carry the
+            # student's name. `show_essay_titles` puts the real titles back, locally, for display.
+            "essay_themes": [{"title": essay_label(i), "themes": e.themes} for i, e in enumerate(self.essays)],
         }
+
+    def show_essay_titles(self, text: str) -> str:
+        """Replace the "Essay N" labels agents use with the student's own essay titles (display only, never sent)."""
+        def sub(m: re.Match) -> str:
+            i = int(m.group(1)) - 1
+            return f"“{self.essays[i].title}”" if 0 <= i < len(self.essays) else m.group(0)
+        return _ESSAY_LABEL.sub(sub, text or "")
 
 
 # ----------------------------------------------------------------------------- agent outputs
@@ -243,10 +260,11 @@ class ClaimCheck(BaseModel):
     index: int
     supported: bool
     issue: str
+    counter_quote: str          # verbatim text (listing or profile) showing the claim is wrong; "" if none
 
 
 class Verification(BaseModel):
-    """Verifier (chain-of-verification) output."""
+    """Verifier output: an attempt to disprove each of the Scorer's claims."""
     checks: list[ClaimCheck]
     fit_rating_justified: bool
     suggested_fit: Literal["strong", "moderate", "weak", "none"]

@@ -25,7 +25,7 @@ Streamlit app ── profile ──► Supervisor ──────────
 | Extractor | LLM | Listing text → structured eligibility with a verbatim quote per field (GPA, residency, localities, levels, class years, majors, declared major, demographics, specific groups, destination college, out-of-state, minimum age, kind of college); merged with the rule-based criteria by `workers.to_criteria` | `ExtractedCriteria` |
 | Filter | LLM | Catch free-text requirements the rules missed (memberships, employers, programs) | `FilterVerdict` keep / drop / uncertain |
 | Scorer | LLM | Judge fit as strong / moderate / weak / none with evidence pairs; essay reuse | `ScoreJudgement` |
-| Verifier | LLM | Independently check each of the Scorer's claims against the sources | `Verification` |
+| Verifier | LLM (different default model from the Scorer) | Try to disprove each of the Scorer's claims against the sources; cite the text that contradicts it | `Verification` |
 | Chat | LLM + 2 read-only tools | Answer follow-ups about one scholarship | text |
 | Rubric | code | Turn judgements into points, estimated chance, effort, expected value | `MatchResult` |
 
@@ -70,8 +70,9 @@ sequenceDiagram
                 Sup->>Sco: listing + redacted profile (+ feedback)
                 Sco-->>Sup: fit category + evidence pairs
                 Sup->>Sup: quotes in listing? evidence in profile?
-                Sup->>Ver: claims + sources (not the Scorer's reasoning)
-                Ver-->>Sup: per-claim supported? rating justified?
+                Sup->>Ver: claims + sources (not the Scorer's reasoning or identity)
+                Ver-->>Sup: per claim: disproved? (+ counter-quote), rating justified?
+                Sup->>Sup: counter-quote in listing or profile? else ignore the objection
             end
             Sup->>Sup: rubric math (points, chance, effort, expected value)
         end
@@ -97,6 +98,8 @@ sequenceDiagram
 | 5. Chat context rot / forgetting its reasoning | Re-grounding every turn + persisted history + compaction + tools | The listing and the stored rubric are re-injected each turn (the agent never relies on its own earlier text); turns are saved; older turns are summarised past 8; two read-only tools fetch other matches for comparisons. |
 | new: prompt injection via scraped text | Untrusted-data framing + no write tools | Listings are wrapped in tags and declared data-only; no agent has a tool that changes state. |
 | new: cost blow-up on a large catalog | Lazy extraction + shortlist cap + cache | Only ≤30 scholarships per run reach agents; extraction is cached by content hash and reused across students. |
+| new: checker shares the author's blind spots (design review, "10 principles") | Falsification prompt + model diversity + held-out check + visible dissent | The Verifier is asked for the strongest evidence each claim is wrong, is not told an agent wrote them, and runs on a different model by default (`config.ROLE_DEFAULT_MODELS`). Its objections must quote the listing or profile. Disputed evidence is dropped and the objection is shown in the "Low confidence" flag. Quotes need ≥ 20 characters and must relate to their criterion; a drop quote must state a requirement (a check no prompt mentions). |
+| new: no evidence that agents beat simpler set-ups | Baselines with the same deterministic stages | `scripts/eval_agents.py` compares rules-only, one unchecked agent call per item, and the pipeline on the labelled regression corpus, and counts flips (Supervisor changes toward / away from the label). |
 | new: provider outage / refusal | Graceful degradation | Per-item fallback to the rule-based score; whole app works in rule-based mode with no key. |
 
 ## Why "same inputs → same output" holds
@@ -136,3 +139,5 @@ agent has tool autonomy, and its two tools are read-only.
   been exercised against a live endpoint in this build (no credentials were available). The agent logic
   itself is covered by tests using a scripted fake model.
 - Source coverage is partial — see README "Source status".
+- The Scorer and Verifier differ by model but not by model family (both Claude by default; one model on VT ARC).
+- The agent-vs-baseline comparison has not been run against a live model yet; only the rules-only numbers exist.

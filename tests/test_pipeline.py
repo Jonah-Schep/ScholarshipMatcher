@@ -90,7 +90,27 @@ def test_supervisor_fails_safe_when_retries_exhausted(catalog, profile):
 
 def test_verifier_rejection_downgrades_fit(catalog, profile):
     run = Supervisor(FakeLLM(verifier_rejects=True)).run(profile, AS_OF)
-    assert get(run, "test:svc").judgement.fit == "weak"                  # verifier's conservative rating wins
+    svc = get(run, "test:svc")
+    assert svc.judgement.fit == "weak"                                   # verifier's conservative rating wins
+    assert svc.judgement.fit_evidence == []                              # disputed evidence is not shown as support
+    flag = next(f for f in svc.flags if f.startswith("Low confidence"))
+    assert "disputed" in flag and "leadership" in flag and "weak link" in flag   # the dissent itself is shown
+
+
+def test_verifier_objection_citing_text_not_in_the_sources_does_not_count(catalog, profile):
+    run = Supervisor(FakeLLM(verifier_rejects=True, verifier_counter_quote="Applicants must hold elected office")).run(
+        profile, AS_OF)
+    svc = get(run, "test:svc")
+    assert len(svc.judgement.fit_evidence) == 2                          # unsupported objections are ignored...
+    assert svc.judgement.fit == "weak"                                   # ...but the rating doubt still lowers the fit
+    events = [(a["agent"], a["event"]) for a in db.audit_for(run.run_id)]
+    assert ("verifier", "unsubstantiated") in events
+
+
+def test_drop_quoting_a_sentence_without_a_requirement_fails_open(catalog, profile):
+    run = Supervisor(FakeLLM(drop_quote="4-H Alumni Scholarship")).run(profile, AS_OF)
+    r = get(run, "test:4h")
+    assert r.filter_verdict.verdict == "uncertain" and any(f.startswith("Check —") for f in r.flags)
 
 
 def test_ungrounded_drop_fails_open(catalog, profile):
@@ -291,3 +311,21 @@ def test_unexpected_error_in_one_item_does_not_end_the_run(catalog, profile):
     run = Supervisor(ScorerBugLLM()).run(profile, AS_OF)
     assert run.results and all(r.mode == "heuristic" for r in run.results)
     assert all(any("AI review step failed" in f for f in r.flags) for r in run.results)
+
+
+def test_eval_agents_compares_rules_single_agent_and_pipeline(tmp_path, capsys):
+    """scripts/eval_agents.py runs all three modes on the regression corpus and reports the comparison."""
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import eval_agents
+    out = tmp_path / "eval.json"
+    assert eval_agents.main(["--profiles", "maya,sam", "--json", str(out)], llm=FakeLLM()) == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert set(data) == {"rules", "single", "pipeline"}
+    assert data["rules"]["usage"]["calls"] == 0
+    assert data["pipeline"]["usage"]["calls"] > data["single"]["usage"]["calls"] > 0
+    assert set(data["pipeline"]["profiles"]) == {"maya", "sam"}
+    text = capsys.readouterr().out
+    assert "inel_top10" in text and "pipeline:" in text

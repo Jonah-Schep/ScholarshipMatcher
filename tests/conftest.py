@@ -61,7 +61,8 @@ def profile():
         level="hs_senior", gpa=3.6, intended_schools=["vt"], majors=["Mechanical Engineering"],
         gender="female", ethnicities=["Hispanic / Latino"], financial_need=True,
         activities=["Robotics team captain", "Food bank volunteer (120 hours)"], interests=["renewable energy"],
-        essays=[Essay(title="Why I serve", text="...", themes=["community service", "leadership"])])
+        # The file name carries the student's name, as real uploads often do: agents must only see "Essay 1".
+        essays=[Essay(title="Jordan_Testcase_why_I_serve.txt", text="...", themes=["community service", "leadership"])])
 
 
 def empty_extraction(**kw) -> ExtractedCriteria:
@@ -82,14 +83,19 @@ class FakeLLM(LLM):
     """Scripted agent outputs. `bad_scorer_rounds` makes the scorer hallucinate N times first."""
     name = "fake"
 
-    def __init__(self, bad_scorer_rounds=0, ungrounded_drop=False, verifier_rejects=False, extract=None):
+    def __init__(self, bad_scorer_rounds=0, ungrounded_drop=False, verifier_rejects=False, extract=None,
+                 verifier_counter_quote="", drop_quote=None):
         """`extract`: {listing substring: {field: value, ..., "quotes": {field: quote}}} scripts extra Extractor
-        fields for the listings that contain the substring (the quotes become `evidence` entries)."""
+        fields for the listings that contain the substring (the quotes become `evidence` entries).
+        `verifier_counter_quote`: the text a rejecting Verifier cites against each claim.
+        `drop_quote`: replaces the quote the Filter gives for dropping the 4-H award."""
         super().__init__()
         self.prompts = []
         self.bad_scorer_rounds = bad_scorer_rounds
         self.ungrounded_drop = ungrounded_drop
         self.verifier_rejects = verifier_rejects
+        self.verifier_counter_quote = verifier_counter_quote
+        self.drop_quote = drop_quote
         self.extract = extract or {}
         self.scorer_calls = {}
 
@@ -114,7 +120,7 @@ class FakeLLM(LLM):
         elif schema is FilterVerdict:
             if "4-H" in listing:
                 quote = ("NOT IN THE LISTING" if self.ungrounded_drop
-                         else "Applicants must be current members of a 4-H club")
+                         else self.drop_quote or "Applicants must be current members of a 4-H club")
                 out = FilterVerdict(verdict="drop", reason="Requires 4-H membership, not in profile.",
                                     scholarship_quote=quote)
             else:
@@ -134,7 +140,7 @@ class FakeLLM(LLM):
                         FitEvidence(criterion="community service",
                                     scholarship_quote="demonstrate leadership and community service",
                                     student_evidence="Food bank volunteer (120 hours)", met=True)],
-                    essay_reuse="partial", reusable_essay_title="Why I serve", strengths=["Leadership"], gaps=[],
+                    essay_reuse="partial", reusable_essay_title="Essay 1", strengths=["Leadership"], gaps=[],
                     summary="Good fit.")
             else:
                 out = ScoreJudgement(fit="moderate", fit_evidence=[], essay_reuse="not_applicable",
@@ -142,10 +148,18 @@ class FakeLLM(LLM):
         elif schema is Verification:
             n = user.count('"index"')
             ok = not self.verifier_rejects
-            out = Verification(checks=[ClaimCheck(index=i, supported=ok, issue="" if ok else "weak link") for i in range(n)],
+            out = Verification(checks=[ClaimCheck(index=i, supported=ok, issue="" if ok else "weak link",
+                                                  counter_quote=self.verifier_counter_quote if not ok else "")
+                                       for i in range(n)],
                                fit_rating_justified=ok, suggested_fit="strong" if ok else "weak")
         elif schema is EssayThemes:
             out = EssayThemes(themes=["service"])
+        elif schema.__name__ == "SingleAgentJudgement":            # the eval-only baseline (agents/baseline.py)
+            drop = "4-H" in listing
+            out = schema(verdict="drop" if drop else "keep", reason="Requires 4-H." if drop else "Nothing excludes.",
+                         scholarship_quote="Applicants must be current members of a 4-H club" if drop else "",
+                         fit="moderate", fit_evidence=[], essay_reuse="not_applicable", reusable_essay_title="",
+                         strengths=[], gaps=[], summary="Eligibility-based award.")
         else:
             raise AssertionError(schema)
         return out, 10, 5

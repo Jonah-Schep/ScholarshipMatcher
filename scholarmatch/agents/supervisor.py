@@ -14,6 +14,7 @@ still served from the per-(profile, scholarship) response cache wherever inputs 
 """
 from __future__ import annotations
 
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
@@ -23,11 +24,65 @@ from ..ingest import extract_rules
 from ..llm import LLM, LLMError, dumps, get_llm
 from ..matching import hard_filter, rubric
 from ..models import (Criteria, Exclusion, ExtractedCriteria, FilterVerdict, MatchResult, MatchRun, Scholarship,
-                      ScoreJudgement, StudentProfile)
+                      ScoreJudgement, StudentProfile, Verification)
 from ..textutil import is_grounded, norm, now_iso, sha, today_iso
 from . import workers
 
 FIT_ORDER = ["none", "weak", "moderate", "strong"]
+
+# Held-out check (paper principle 7): a Filter "drop" must quote a sentence with requirement wording. This list is
+# deliberately NOT in any prompt, so an agent cannot satisfy it by habit. A drop that fails it is retried, then becomes
+# "uncertain" (the scholarship stays), so it can only make the pipeline more cautious. Changing it -> bump CHECKS_VERSION.
+_REQUIREMENT_WORDING = re.compile(
+    r"\b(must|only|requir\w*|eligib\w*|open to|limited to|restricted to|reserved for|available (?:only )?to|"
+    r"awarded to|intended for|members? of|employees? of|child(?:ren)? of|dependents? of|spouses? of|"
+    r"applicants? (?:who|with|from)|students? (?:who|with|majoring|enrolled|pursuing|planning|in the)|"
+    r"need to|has to|have to)\b", re.I)
+_STOP = {"with", "that", "this", "from", "have", "will", "must", "their", "they", "your", "students", "student",
+         "applicant", "applicants", "scholarship", "scholarships", "award", "awards", "should", "which", "other"}
+
+
+def _words(text: str) -> set[str]:
+    return {w[:5] for w in re.findall(r"[a-z]{4,}", norm(text)) if w not in _STOP}
+
+
+def shares_word(criterion: str, quote: str) -> bool:
+    """Cheap relevance check: the criterion must share a content word (compared on its first five letters, so
+    "volunteer" matches "volunteering") with the listing text quoted for it."""
+    return bool(_words(criterion) & _words(quote))
+
+
+def drop_problem(quote: str, text: str) -> str:
+    """Why a Filter "drop" quote is not acceptable, or "" if it is."""
+    if not is_grounded(quote, text, config.MIN_EVIDENCE_QUOTE_CHARS):
+        return (f"scholarship_quote is not a verbatim span of the listing of at least "
+                f"{config.MIN_EVIDENCE_QUOTE_CHARS} characters.")
+    if not _REQUIREMENT_WORDING.search(quote):
+        return "the quoted text does not state a requirement."
+    return ""
+
+
+def _clip(text: str, n: int = 140) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def low_confidence_flag(disputes: list[tuple[str, str, bool]], proposed: str, suggested: Optional[str]) -> str:
+    """The student-facing flag when the Scorer and its checks did not agree within the round limit. It carries the
+    checker's actual objections (up to two) instead of a generic warning, so the dissent is visible (principle 9)."""
+    msg = "Low confidence — the fit rating could not be fully verified and was set conservatively."
+    against = [(c, issue) for c, issue, met in disputes if met]
+    for_you = [(c, issue) for c, issue, met in disputes if not met]
+    for label, group in (("A checker disputed", against), ("A checker thinks you may meet", for_you)):
+        if group:
+            parts = [f"“{_clip(c, 60)}” ({_clip(issue).rstrip('.')})" for c, issue in group[:2]]
+            more = f" and {len(group) - 2} more" if len(group) > 2 else ""
+            msg += f" {label} " + "; ".join(parts) + more + "."
+    if not disputes and suggested and FIT_ORDER.index(suggested) < FIT_ORDER.index(proposed):
+        msg += f" A checker rated the fit “{suggested}”, not “{proposed}”."
+    return msg
+
+
 Progress = Optional[Callable[[str, float], None]]
 
 
@@ -41,7 +96,8 @@ class Supervisor:
     def fingerprint(self, p: StudentProfile, as_of: str) -> str:
         models = {r: self.llm.model(r) for r in config.ROLES}
         return sha(p.model_dump(), db.catalog_version(), as_of, config.RULES_VERSION, config.PROMPT_VERSION,
-                   config.RUBRIC_VERSION, self.llm.name, models, config.MAX_LLM_CANDIDATES)[:20]
+                   config.RUBRIC_VERSION, config.CHECKS_VERSION, config.MIN_EVIDENCE_QUOTE_CHARS, self.llm.name,
+                   models, config.MAX_LLM_CANDIDATES)[:20]
 
     def run(self, p: StudentProfile, as_of: Optional[str] = None, force: bool = False,
             progress: Progress = None) -> MatchRun:
@@ -200,14 +256,18 @@ class Supervisor:
         return workers.ungrounded_fields(x, text)
 
     def _supervised_filter(self, s: Scholarship, c: Criteria, view: dict) -> FilterVerdict:
-        feedback, v = "", None
+        text, feedback, v = s.full_text(), "", None
         for round_no in range(config.MAX_SUPERVISOR_ROUNDS):
             v = workers.run_filter(self.llm, s, c, view, feedback)
-            if v.verdict != "drop" or is_grounded(v.scholarship_quote, s.full_text()):
+            if v.verdict != "drop":
                 return v
-            self._audit("filter", "rejected", {"key": s.key, "round": round_no + 1, "quote": v.scholarship_quote[:200]})
-            feedback = ("Your 'drop' verdict was rejected: scholarship_quote is not a verbatim span of the listing. "
-                        "Quote the exact requirement, or change the verdict to 'uncertain'.")
+            problem = drop_problem(v.scholarship_quote, text)
+            if not problem:
+                return v
+            self._audit("filter", "rejected", {"key": s.key, "round": round_no + 1, "problem": problem,
+                                               "quote": v.scholarship_quote[:200]})
+            feedback = (f"Your 'drop' verdict was rejected: {problem} "
+                        "Quote the exact sentence that states the requirement, or change the verdict to 'uncertain'.")
         # fail open: an unsupported 'drop' never hides a scholarship
         return FilterVerdict(verdict="uncertain", scholarship_quote="",
                              reason=f"Screening agent raised a concern it could not substantiate: {v.reason}")
@@ -215,40 +275,68 @@ class Supervisor:
     def _supervised_score(self, s: Scholarship, c: Criteria, view: dict) -> tuple[ScoreJudgement, list[str]]:
         text, profile_text = s.full_text(), norm(dumps(view))
         titles = {e["title"] for e in view.get("essay_themes", [])}
-        feedback, j, problems = "", None, []
+        feedback, j, problems, objections, ver = "", None, [], [], None
         for round_no in range(config.MAX_SUPERVISOR_ROUNDS):
             j = workers.run_scorer(self.llm, s, c, view, feedback)
             problems = self._score_problems(j, text, profile_text, titles)
-            ver = None
+            ver, objections = None, []
             if not problems and j.fit_evidence:
                 ver = workers.run_verifier(self.llm, s, view, j)
-                problems = [f"claim {ch.index} ({j.fit_evidence[ch.index].criterion!r}): {ch.issue}"
-                            for ch in ver.checks if not ch.supported and 0 <= ch.index < len(j.fit_evidence)]
+                objections = self._objections(s.key, ver, j, text, profile_text)
+                problems = [f"claim {i} ({j.fit_evidence[i].criterion!r}): {issue}" + (f' The text shows: "{q}".' if q else "")
+                            for i, issue, q in objections]
                 if not ver.fit_rating_justified:
                     problems.append(f"fit '{j.fit}' is not justified by the evidence; verifier suggests '{ver.suggested_fit}'.")
             if not problems:
                 self._audit("scorer", "accepted", {"key": s.key, "round": round_no + 1, "fit": j.fit})
                 return j, []
-            self._audit("scorer", "rejected", {"key": s.key, "round": round_no + 1, "problems": problems})
+            self._audit("scorer", "rejected", {"key": s.key, "round": round_no + 1, "fit": j.fit, "problems": problems})
             feedback = "\n".join(f"- {x}" for x in problems)
-        # Rounds exhausted: keep only mechanically-grounded evidence and take the more conservative rating.
-        kept = [e for e in j.fit_evidence
-                if is_grounded(e.scholarship_quote, text) and (not e.met or norm(e.student_evidence) in profile_text)]
+        # Rounds exhausted: keep only evidence that is mechanically grounded AND that the Verifier did not dispute in
+        # its last check, and take the most conservative rating.
+        disputed = {i for i, _, _ in objections}
+        criteria = [e.criterion for e in j.fit_evidence]
+        claim_met = [e.met for e in j.fit_evidence]            # the Scorer's own call, before any evidence is dropped
+        kept = [e for i, e in enumerate(j.fit_evidence)
+                if i not in disputed and is_grounded(e.scholarship_quote, text, config.MIN_EVIDENCE_QUOTE_CHARS)
+                and (not e.met or norm(e.student_evidence) in profile_text)]
         met = sum(e.met for e in kept)
         ceiling = "strong" if met >= 2 else "moderate" if met == 1 else "weak"
+        proposed = j.fit
         fit = min(j.fit, ceiling, key=FIT_ORDER.index)
         if ver is not None:
             fit = min(fit, ver.suggested_fit, key=FIT_ORDER.index)
         j = j.model_copy(update={"fit": fit, "fit_evidence": kept,
                                  "reusable_essay_title": j.reusable_essay_title if j.reusable_essay_title in titles else ""})
-        return j, ["Low confidence — the fit rating could not be fully verified and was set conservatively."]
+        self._audit("scorer", "downgraded", {"key": s.key, "from": proposed, "to": fit, "disputed": sorted(disputed)})
+        disputes = [(criteria[i], issue, claim_met[i]) for i, issue, _ in objections]
+        return j, [low_confidence_flag(disputes, proposed, ver.suggested_fit if ver is not None else None)]
+
+    def _objections(self, key: str, ver: Verification, j: ScoreJudgement, text: str,
+                    profile_text: str) -> list[tuple[int, str, str]]:
+        """The Verifier's rejections as (claim index, issue, counter_quote). A rejection that cites text which is in
+        neither the listing nor the profile is itself unsupported: it is logged and does not count."""
+        out = []
+        for ch in ver.checks:
+            if ch.supported or not 0 <= ch.index < len(j.fit_evidence):
+                continue
+            q = ch.counter_quote.strip()
+            if q and not (is_grounded(q, text) or is_grounded(q, profile_text)):
+                self._audit("verifier", "unsubstantiated", {"key": key, "claim": ch.index, "counter_quote": q[:200]})
+                continue
+            out.append((ch.index, ch.issue.strip() or "not supported by the listing or profile", q))
+        return out
 
     @staticmethod
     def _score_problems(j: ScoreJudgement, text: str, profile_text: str, titles: set[str]) -> list[str]:
         probs = []
         for i, e in enumerate(j.fit_evidence):
-            if not is_grounded(e.scholarship_quote, text):
-                probs.append(f"claim {i}: scholarship_quote is not a verbatim span of the listing.")
+            if not is_grounded(e.scholarship_quote, text, config.MIN_EVIDENCE_QUOTE_CHARS):
+                probs.append(f"claim {i}: scholarship_quote is not a verbatim span of the listing of at least "
+                             f"{config.MIN_EVIDENCE_QUOTE_CHARS} characters.")
+            elif not shares_word(e.criterion, e.scholarship_quote):
+                probs.append(f"claim {i}: criterion {e.criterion!r} does not appear in its scholarship_quote; "
+                             "name the criterion in the listing's own words and quote where the listing asks for it.")
             if e.met and (len(e.student_evidence) < 3 or norm(e.student_evidence) not in profile_text):
                 probs.append(f"claim {i}: student_evidence {e.student_evidence!r} is not an item in the student profile.")
         if j.fit == "strong" and sum(e.met for e in j.fit_evidence) < 2:

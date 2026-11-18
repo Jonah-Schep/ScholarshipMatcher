@@ -3,7 +3,7 @@
   Extractor   scholarship text            -> structured eligibility + verbatim evidence
   Filter      ONE scholarship + profile   -> keep / drop / uncertain (+ quote)
   Scorer      ONE scholarship + profile   -> categorical fit judgement (+ evidence pairs)
-  Verifier    Scorer's claims + sources   -> per-claim supported? (chain-of-verification)
+  Verifier    claims + sources            -> tries to disprove each claim (falsification, not review)
   Themes      one past essay              -> short theme list
 
 Shared rules baked into every prompt:
@@ -99,21 +99,37 @@ fit_evidence: one entry per selection criterion you considered (max 6).
   student_evidence: copy the matching item EXACTLY as it appears in the student profile JSON (one activity,
   interest, major, award or essay theme). Use "" and met=false when the profile has nothing for that criterion.
   Do not invent or embellish student facts.
+  Only selection criteria belong here (what the committee looks for: leadership, service, career goals, interests).
+  Do not list eligibility rules (level, class year, GPA, residency, school, major, degree status, financial need):
+  code has already checked those.
 essay_reuse: if the application needs an essay, could one of the student's past essays (see essay_themes) be
   reused? "full" (same prompt topic), "partial" (adaptable), "none". Use "not_applicable" if no essay is needed.
   reusable_essay_title must be exactly one of the listed essay titles, or "".
 strengths / gaps: up to 3 short, specific bullets each. summary: one sentence a student can act on."""
 
-VERIFIER_SYSTEM = f"""You are an independent verifier. Another agent made claims about how a student fits a scholarship.
-You see only the sources and the claims - not that agent's reasoning. Check each claim on its own.
+VERIFIER_SYSTEM = f"""You are a fact-checker for a scholarship matcher. Below are numbered claims about how a student fits
+one scholarship, and a proposed overall rating. Where the claims came from does not matter. Treat every claim as
+unproven: your job is to try to show it is wrong, and to accept it only if that attempt fails.
 {_DATA_RULE}
 
-For each numbered claim: supported=true only if (a) the scholarship really asks for that criterion per the quoted
-text, AND (b) when met=true, the cited student evidence genuinely satisfies it (not just a shared keyword).
-For met=false claims, supported=true if the profile indeed shows nothing for it. Give a short `issue` when
-supported=false, else "".
-Then judge the overall rating using these definitions: strong = two or more specific matches; moderate = one match
-or no subjective criteria; weak = loose overlap; none = no sign. Set fit_rating_justified and suggested_fit."""
+For each numbered claim, first look for the strongest evidence against it:
+- the listing asks for something narrower, stricter or different from the claim's criterion;
+- the quoted listing text is background or a general description, not something selection is based on;
+- met=true: the student evidence shares a word with the criterion but does not actually satisfy it;
+- met=false: the student profile does contain something that satisfies the criterion.
+supported=false if you found such evidence, else true.
+counter_quote: when supported=false, copy the exact words from the listing or the student profile that show the
+claim is wrong (a contiguous span, at most ~200 characters, never paraphrased). Use "" when supported=true, or
+when the problem is that support is missing rather than contradicted.
+issue: when supported=false, one short plain sentence a student can understand; else "".
+Eligibility rules (level, class year, GPA, residency, school, major, degree status) were already checked by code.
+If a claim restates one of them, mark it supported unless the profile plainly contradicts it: a detail the profile
+does not mention is not a contradiction. "Rising" years refer to next year: a current sophomore is a rising junior,
+a current junior a rising senior, a high-school senior an incoming freshman.
+
+Then try to argue the proposed rating is too high before accepting it, using these definitions: strong = two or more
+specific matches; moderate = one match or no subjective criteria; weak = loose overlap; none = no sign.
+Set fit_rating_justified, and suggested_fit to the rating the surviving claims support."""
 
 THEMES_SYSTEM = """Summarise a student's past scholarship/college essay into 3-6 short theme phrases
 (topic, values shown, experiences described) so it can be matched to future essay prompts.
@@ -286,12 +302,15 @@ def run_verifier(llm: LLM, s: Scholarship, profile_view: dict, j: ScoreJudgement
     return llm.structured("verifier", VERIFIER_SYSTEM, user, Verification)
 
 
-def essay_themes(llm: LLM, title: str, text: str, names: tuple[str, ...] = ()) -> list[str]:
-    """Essays never go to the matching agents; only these themes do. PII is stripped first."""
+def essay_themes(llm: LLM, title: str, text: str, names: tuple[str, ...] = (),
+                 places: tuple[str, ...] = ()) -> list[str]:
+    """Essays never go to the matching agents; only these themes do. This one call does send the essay text to the
+    provider, with the student's name, contact details and local places (county, city, high school) removed first.
+    The title (a file name, which can carry the student's name) is not sent."""
     if not llm.available:
         from ..matching.rubric import _tokens
         words = sorted(_tokens(text), key=lambda w: (-text.lower().count(w), w))
         return words[:6]
     out: Optional[EssayThemes] = llm.structured(
-        "extractor", THEMES_SYSTEM, f"<essay title={title!r}>\n{redact_pii(text, names)}\n</essay>", EssayThemes)
+        "extractor", THEMES_SYSTEM, f"<essay>\n{redact_pii(text, names, places)}\n</essay>", EssayThemes)
     return out.themes[:6]

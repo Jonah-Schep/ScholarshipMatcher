@@ -17,6 +17,12 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - False-positive eval (rule-based, offline): `python scripts/eval_profiles.py` (local catalog), `--db PATH`,
   `--corpus` (regression corpus only), `--show`, `--as-of DATE` (default pinned to 2026-11-12 so numbers compare
   across sessions; deadlines are judged against it). Works on a temp copy; never writes to the catalog.
+- Agents vs baselines (design review, principle 10): `python scripts/eval_agents.py` runs `rules`, `single` (one
+  unchecked LLM call per item, `agents/baseline.py`, eval-only) and `pipeline` on the regression corpus and reports
+  ineligible-shown, eligible-lost, flagged, calls/tokens, agent drops judged against the labels, and flips (where a
+  Supervisor check changed an answer, toward or away from the label). `--modes`, `--profiles`, `--work-db PATH`
+  (reuse the cache), `--db`, `--json`. Uses the provider in `.env`: a full live run on VT ARC takes hours; set
+  `SM_LLM_PROVIDER=offline` for the rules-only numbers.
 - Refresh the regression corpus from a real catalog: `python scripts/export_regression.py --db PATH [--dry-run]`
 - App: `streamlit run app.py`, port 8517. Launch configs in `.claude/launch.json`: `scholarmatch` (Windows,
   `python` on PATH) and `scholarmatch-mac` (`.venv/bin/python`, since `python` is not on PATH on the Mac).
@@ -49,7 +55,8 @@ Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
 2. SQL filter (scam, deadline, state/school, loans, GPA) → `hard_filter.check` pass/fail/unknown → pre-rank → cap at `SM_MAX_LLM_CANDIDATES`.
 3. For each shortlisted scholarship (in parallel across scholarships): Extractor (criteria + quotes, grounded) → rule re-check →
    Filter (keep/drop/uncertain; a drop must quote the listing) → Scorer (fit category + evidence) → Verifier
-   (checks claims only, never sees the Scorer's reasoning). Each loop is at most `MAX_SUPERVISOR_ROUNDS` rounds.
+   (tries to disprove each claim, never sees the Scorer's reasoning, runs on a different model by default). Each loop
+   is at most `MAX_SUPERVISOR_ROUNDS` rounds.
    LLM criteria are cached per row under `PROMPT_VERSION:RULES_VERSION:model` (they carry rule-extracted fields).
 4. `rubric.py` turns categories into points, chance, effort and expected value → saves the `MatchRun` and audit events to the DB.
 Chat (`agents/chat.py`) answers follow-ups on a single scholarship from the listing, the stored rubric and a compacted history.
@@ -75,11 +82,14 @@ Full sequence diagram: `docs/architecture.md`.
    `LLMError`: keep the scholarship, take the conservative rating, add a flag. Never hide an eligible award
    because an agent misbehaved.
 6. **Privacy.** Agents only ever receive `StudentProfile.redacted_view()`. Name, contact, county/city/high
-   school, gender, ethnicity, disability stay local. New profile fields default to *not* being in the view.
+   school, gender, ethnicity, disability stay local. Essay titles stay local too (agents get "Essay N"); essay text
+   leaves only through `workers.essay_themes`, redacted. New profile fields default to *not* being in the view.
    `test_no_pii_reaches_agents` must keep passing.
 7. **One scholarship per agent call**, prompts built with `llm.dumps` (sorted keys) so cache keys are stable.
 8. **Consistency.** Anything that can change an answer must be in `Supervisor.fingerprint`. Changing a
-   prompt → bump `config.PROMPT_VERSION`; changing rule extraction → bump `config.RULES_VERSION`.
+   prompt → bump `config.PROMPT_VERSION`; changing rule extraction → bump `config.RULES_VERSION`; changing a
+   Supervisor acceptance check (`drop_problem`, `_score_problems`, `_objections`, `MIN_EVIDENCE_QUOTE_CHARS`) → bump
+   `config.CHECKS_VERSION`.
 9. **Catalog rows are never deleted**; ended awards are filtered at query time.
 10. **Scraping.** All HTTP goes through `scrapers/http.PoliteFetcher`. Never add a source without checking
     its robots.txt and terms; never work around a 403/challenge; never log in; no parallel requests to one
@@ -93,7 +103,9 @@ Full sequence diagram: `docs/architecture.md`.
 - `llm/anthropic_client.py` uses the official `anthropic` SDK: `messages.parse(output_format=...)`,
   `output_config={"effort": ...}`, server-side refusal fallback on models that support it. Current Claude
   models reject `temperature`/`top_p`/`budget_tokens` and assistant prefill — do not add them.
-  Default model `claude-opus-5-5`; per-role overrides via `SM_MODEL_<ROLE>`.
+  Default model `claude-opus-5-5`, except the Verifier (`config.ROLE_DEFAULT_MODELS`: `claude-sonnet-5-5`, so the
+  checker does not share the Scorer's model); per-role overrides via `SM_MODEL_<ROLE>`. The OpenAI-compatible
+  provider ignores `ROLE_DEFAULT_MODELS` (VT ARC has too few models; decided 2026-11-17).
 - `llm/openai_compat.py` is a separate, optional provider (OpenAI SDK). Keep the two files independent.
 - No provider configured → `OfflineLLM` (`available = False`) and every agent has a rule-based path.
 
@@ -128,8 +140,8 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 Fix plan WP0–WP8 are done, and so is WP6 apart from the supplement values (round 3: `docs/manual_test_2026-11-14_round3.md`).
 Per-package detail and the "WPn notes" are in `docs/fix_plan.md`, which is where to look before changing a rule below.
-- Tests: 227 collected = 223 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
-- Versions: `rules-7`, `p2`, `rubric-6`. Each rule family below added its own version bump.
+- Tests: 238 collected = 234 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
+- Versions: `rules-7`, `p5`, `rubric-6`, `checks-2`. Each rule family below added its own version bump.
 - Behaviour that is easy to miss when reading one file:
   - **Unknown amounts:** "$0.00" means unknown (`amount_value=None`, "Varies", plus a flag). It is not excluded.
   - **Certainty** (`rubric.info_level`): `none` (title only, or under 40 chars) caps eligibility certainty at 30%.
@@ -156,6 +168,30 @@ Per-package detail and the "WPn notes" are in `docs/fix_plan.md`, which is where
   - **Extractor merge** (`workers.to_criteria`): an ungrounded value means the rule value is kept. For lists, the
     result is the union of rule and LLM values. A grounded scalar replaces the rule value. A null or false from the
     model keeps the rule value. `Criteria.from_rules` lists the fields that came from rules alone.
+  - **Design-review fixes (2026-11-17, "10 principles" paper):**
+    - Verifier prompt (`p3`) asks it to disprove each claim, with no hint that another agent wrote them. A rejection
+      carries a `counter_quote`; one that cites text in neither the listing nor the profile is ignored and logged
+      (`verifier` / `unsubstantiated`).
+    - When the Scorer's rounds run out, evidence the Verifier disputed is dropped (it used to stay if its quote was
+      grounded), and the "Low confidence" flag names up to two disputed criteria with the checker's reason.
+    - Scorer evidence and Filter drop quotes need ≥ `MIN_EVIDENCE_QUOTE_CHARS` (20) characters; each evidence
+      criterion must share a content word with its quote (`supervisor.shares_word`). A drop quote must also contain
+      requirement wording (`supervisor._REQUIREMENT_WORDING`): a held-out check that is deliberately in no prompt.
+      All of these can only retry, turn a drop into "uncertain" or lower a fit; none can hide a scholarship.
+    - Audit events added: `scorer` / `downgraded`, `verifier` / `unsubstantiated`; `scorer` / `rejected` now records
+      the fit.
+    - After the first live run (VT ARC, 2026-11-18, `demo`): `p4` tells the Verifier that eligibility rules were
+      checked by code and that "rising junior" includes current sophomores (it had rejected those claims), and tells
+      the Scorer to list selection criteria only. `checks-2` accepts "student who / with / majoring …" as requirement
+      wording. The flag says "A checker thinks you may meet …" when the objection favours the student.
+      `openai_compat` errors now start with the role (the run had 4 fallbacks: 2 invalid JSON, timeouts).
+  - **Essays (live test 2026-11-18):** agents see essays only as "Essay 1", "Essay 2" (`models.essay_label`; file
+    names such as "Priya_robotics_essay.txt" carried the student's name to every agent). The app puts the real titles
+    back for display with `StudentProfile.show_essay_titles` (summary, strengths, gaps, flags, essay tip, chat). The
+    one call that sends essay text (`workers.essay_themes`) no longer sends the title and removes the name plus
+    county, city and high school as whole phrases (`textutil.redact_pii(..., places=...)`). A name part that the
+    essay also uses as a lowercase word ("One", "Grace") is no longer replaced everywhere; only the full name is.
+    Other names in an essay (family, friends) are still sent, and the upload caption says so.
   - **Run header:** `run_summary.review_mode_label(run)` shows "AI-reviewed (N of M)", "rule-based", "rule-based
     (AI review unavailable)", or "AI review on (nothing passed the rule checks to review)" for an empty LLM run.
   - **LLM concurrency:** every provider call goes through one process-wide semaphore (`llm._inflight()`,
@@ -185,7 +221,10 @@ all "Verify" items D1 keeps visible (group limits, SC CHE programs for profiles 
    ("incoming undergraduate", Merryman). The WP7 union cannot remove a wrong widening; needs a policy decision.
 2. **Small rule gaps:** VTCSOM (MD) awards pass for vet-med students; an affiliation passes a group check only on a
    distinctive shared word (a staff-parent affiliation does not pass "dependents of … staff or faculty").
-3. **Anthropic provider** never run live.
+3. **Anthropic provider** never run live, so the Verifier's different default model is untested too.
+5. **Agents vs baselines not yet measured live:** `scripts/eval_agents.py` exists and is tested with `FakeLLM`; the
+   `single` and `pipeline` numbers need a live provider run (rules-only on the corpus, 2026-11-17: 64 shown,
+   21 known-ineligible shown, 17 in top tens, 0 eligible lost).
 4. **Waiting on the user:** the HOPE, LIFE, Palmetto Fellows and Need-based Grant citizenship (and maybe GPA) rules
    exist only in the PDFs. The user types them into `manual_sources/supplements/sc_che.csv` (read
    `manual_sources/README.md` first). Then re-ingest and delete the 4 "WP6-supplement" `XFAIL` entries that turn

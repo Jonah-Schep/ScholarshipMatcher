@@ -1057,7 +1057,7 @@ def test_extractor_schema_and_prompt_cover_the_new_fields():
         assert _DATA_RULE in prompt
     assert _QUOTE_RULE in EXTRACTOR_SYSTEM and _QUOTE_RULE in FILTER_SYSTEM
     assert 'When in doubt choose "uncertain"' in FILTER_SYSTEM and "restricted_groups" in FILTER_SYSTEM
-    assert config.PROMPT_VERSION == "p2"
+    assert config.PROMPT_VERSION == "p5"
 
 
 # --- WP8 / rules-7: cases found on the real VT listings (re-scrape 2026-11-14) -----------------------------------
@@ -1212,3 +1212,106 @@ def test_survey_and_release_forms_are_not_scholarships(tmp_db):
     rows, counts = hard_filter.sql_stage(StudentProfile(profile_id="x", state="VA", intended_schools=["vt"]), "2026-11-14")
     assert [r["scholarship"].name for r in rows] == ["Survey Engineering Scholarship"]
     assert counts == {"loan, reimbursement or form, not a scholarship": 1}
+
+
+# ----------------------------------------------------------------------------- design review fixes (10 principles)
+def test_verifier_prompt_tries_to_disprove_and_hides_the_source_of_claims():
+    from scholarmatch.agents.workers import VERIFIER_SYSTEM, _DATA_RULE
+    assert _DATA_RULE in VERIFIER_SYSTEM
+    assert "another agent" not in VERIFIER_SYSTEM.lower()                 # no hint that a peer wrote the claims
+    assert "strongest evidence against it" in VERIFIER_SYSTEM and "counter_quote" in VERIFIER_SYSTEM
+    # live run 2026-11-18: the Verifier rejected "rising junior" claims for a sophomore
+    assert "a current sophomore is a rising junior" in VERIFIER_SYSTEM
+
+
+def test_verifier_runs_on_a_different_model_by_default(monkeypatch):
+    from scholarmatch import config
+    monkeypatch.delenv("SM_MODEL_VERIFIER", raising=False)
+    monkeypatch.delenv("SM_MODEL_SCORER", raising=False)
+    assert config.model_for("verifier") != config.model_for("scorer")
+    monkeypatch.setenv("SM_MODEL_VERIFIER", "claude-opus-5-5")
+    assert config.model_for("verifier") == "claude-opus-5-5"            # an explicit setting still wins
+
+
+def test_drop_quote_must_be_long_grounded_and_state_a_requirement():
+    from scholarmatch.agents.supervisor import drop_problem
+    text = "4-H Alumni Scholarship. Applicants must be current members of a 4-H club. Open to high school seniors."
+    assert drop_problem("Applicants must be current members of a 4-H club", text) == ""
+    assert "does not state a requirement" in drop_problem("4-H Alumni Scholarship", text)
+    assert "verbatim" in drop_problem("4-H club", text)                  # grounded, but too short to prove anything
+    assert "verbatim" in drop_problem("Applicants must be members of the Grange", text)
+    # live run 2026-11-18: a "who can apply" sentence written as a purpose statement still states a requirement
+    purpose = ("was established to provide scholarship support for a current undergraduate student with demonstrated "
+               "financial need, who plans to pursue a career as a medical physician.")
+    assert drop_problem(purpose, purpose) == ""
+    assert "does not state a requirement" in drop_problem("To provide support for the Program in Real Estate.",
+                                                          "To provide support for the Program in Real Estate.")
+
+
+def test_low_confidence_flag_shows_the_checkers_objections_in_plain_words():
+    from scholarmatch.agents.supervisor import low_confidence_flag
+    msg = low_confidence_flag([("leadership", "Club membership is not elected office.", True),
+                               ("service", "The profile lists 120 food bank hours.", False)], "strong", "weak")
+    assert "A checker disputed “leadership” (Club membership is not elected office)." in msg
+    assert "A checker thinks you may meet “service” (The profile lists 120 food bank hours)." in msg
+    assert ".." not in msg
+    assert "rated the fit “weak”" in low_confidence_flag([], "strong", "weak")
+
+
+def test_evidence_quote_must_be_long_enough_and_name_the_criterion():
+    from scholarmatch.agents.supervisor import Supervisor, shares_word
+    from scholarmatch.models import FitEvidence, ScoreJudgement
+    assert shares_word("volunteer service", "demonstrated volunteering in the community")
+    assert not shares_word("leadership", "Applicants must reside in Virginia")
+    text = "Applicants must demonstrate leadership and community service. Applicants must reside in Virginia."
+    def judged(quote, criterion="leadership"):
+        return ScoreJudgement(fit="moderate", fit_evidence=[FitEvidence(criterion=criterion, scholarship_quote=quote,
+                              student_evidence="", met=False)], essay_reuse="not_applicable", reusable_essay_title="",
+                              strengths=[], gaps=[], summary="")
+    probs = Supervisor._score_problems
+    assert probs(judged("Applicants must demonstrate leadership"), text, "", set()) == []
+    assert "at least" in probs(judged("leadership"), text, "", set())[0]
+    assert "does not appear" in probs(judged("Applicants must reside in Virginia"), text, "", set())[0]
+
+
+
+# ----------------------------------------------------------------------------- essays (live test 2026-11-18)
+def test_essay_redaction_removes_name_and_local_places_but_not_ordinary_words():
+    text = ("One nurse at West Charlotte High School took one extra minute. I live in Charlotte, Mecklenburg County. "
+            "My high school counselor helped. - Test One. Priya wrote this.")
+    out = redact_pii(text, ("Test One",), ("Mecklenburg", "Charlotte", "West Charlotte High School"))
+    assert "Charlotte" not in out and "Mecklenburg" not in out and "[place]" in out
+    assert "took one extra minute" in out and "One nurse" in out       # "one" is an ordinary word here
+    assert "[name]" in out and "Test One" not in out                     # the full name still goes
+    assert "high school counselor" in out                                # no stray "High"/"School" removal
+    assert "[name] wrote" in redact_pii("Priya wrote this.", ("Priya Patel",))
+
+
+def test_agents_see_essay_labels_and_the_app_restores_titles():
+    from scholarmatch.models import Essay, StudentProfile
+    p = StudentProfile(profile_id="x", display_name="Priya Patel",
+                       essays=[Essay(title="Priya_robotics_essay.txt", text="...", themes=["teamwork"]),
+                               Essay(title="why_cs.txt", text="...", themes=["security"])])
+    view = p.redacted_view()
+    assert [e["title"] for e in view["essay_themes"]] == ["Essay 1", "Essay 2"]
+    assert "Priya" not in str(view)
+    assert p.show_essay_titles("Adapt Essay 1; Essay 2 is a backup. Essay 3?") == (
+        "Adapt \u201cPriya_robotics_essay.txt\u201d; \u201cwhy_cs.txt\u201d is a backup. Essay 3?")
+
+
+def test_essay_themes_call_sends_neither_title_nor_local_places():
+    from scholarmatch.agents.workers import essay_themes
+    from scholarmatch.llm import LLM
+    from scholarmatch.models import EssayThemes
+
+    class Capture(LLM):
+        name = "capture"
+        sent = ""
+
+        def _structured(self, role, system, user, schema):
+            Capture.sent = user
+            return EssayThemes(themes=["teamwork"]), 1, 1
+
+    essay_themes(Capture(), "Priya_robotics_essay.txt", "At Blacksburg High School our robot curved.",
+                 ("Priya Patel",), ("Montgomery", "Blacksburg", "Blacksburg High School"))
+    assert "Priya" not in Capture.sent and "Blacksburg" not in Capture.sent and "robot curved" in Capture.sent

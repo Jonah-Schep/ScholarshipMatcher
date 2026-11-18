@@ -71,7 +71,7 @@ class OpenAICompatLLM(LLM):
                     messages=[{"role": "system", "content": sys_prompt},
                               {"role": "user", "content": user + last_err}])
             except Exception as e:
-                raise LLMError(f"{type(e).__name__}: {e}") from e
+                raise LLMError(f"{role}: {type(e).__name__}: {e}") from e
             text = resp.choices[0].message.content or ""
             try:
                 out = schema.model_validate_json(text[text.find("{"): text.rfind("}") + 1])
@@ -79,7 +79,7 @@ class OpenAICompatLLM(LLM):
                 return out, getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0)
             except ValidationError as e:
                 last_err = f"\n\nYour previous answer was invalid: {str(e)[:500]}\nReturn corrected JSON."
-        raise LLMError("Model did not return schema-valid JSON after one repair attempt.")
+        raise LLMError(f"{role}: model did not return schema-valid JSON after one repair attempt.")
 
     def _chat(self, role: str, system: str, messages: list[dict],
               tools: Optional[list[dict]], run_tool: Optional[Callable[[str, dict], str]]) -> str:

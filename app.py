@@ -136,8 +136,10 @@ def page_profile(pid: str) -> None:
                                      p.no_special_affiliations)
 
         st.subheader("Past essays")
-        st.caption("Upload essays you've already written (.txt or .pdf). The app keeps the text locally and only "
-                   "shares a short list of themes with the AI, to spot scholarships where you can reuse them.")
+        st.caption("Upload essays you've already written (.txt or .pdf). The text is stored on this computer. It is "
+                   "sent to the AI once, with your name, county, city and high school removed, to pull out a short "
+                   "list of themes; after that only the themes are used to spot scholarships where you can reuse an "
+                   "essay. Other names in the essay (family, friends) are not removed.")
         uploads = st.file_uploader("Add essays", type=["txt", "pdf"], accept_multiple_files=True)
         keep = st.multiselect("Essays on file", [e.title for e in p.essays], default=[e.title for e in p.essays])
         submitted = st.form_submit_button("Save profile", type="primary")
@@ -149,7 +151,7 @@ def page_profile(pid: str) -> None:
             if text and up.name not in [e.title for e in essays]:
                 with st.spinner(f"Reading {up.name}…"):
                     try:
-                        themes = workers.essay_themes(llm(), up.name, text, (display_name,))
+                        themes = workers.essay_themes(llm(), up.name, text, (display_name,), (county, city, high_school))
                     except Exception as e:
                         themes = []
                         st.warning(f"Couldn't summarise {up.name} ({e}); saved without themes.")
@@ -256,7 +258,7 @@ def page_matches(pid: str) -> None:
 
     saved = {x["key"] for x in db.list_saved(pid)}
     for i, r in enumerate(results, 1):
-        result_card(pid, r, i, r.scholarship_key in saved)
+        result_card(pid, r, i, r.scholarship_key in saved, p.show_essay_titles if p else str)
     show_exclusions(run)
 
 
@@ -265,7 +267,8 @@ def config_today() -> str:
     return today_iso()
 
 
-def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool) -> None:
+def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool, show=str) -> None:
+    """`show` puts the student's essay titles back in place of the "Essay N" labels the agents saw."""
     with st.container(border=True):
         head, act = st.columns([5, 1])
         title = f"{rank}. [{r.name}]({r.url})" if r.url else f"{rank}. {r.name}"
@@ -291,9 +294,9 @@ def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool) -> None:
         m[4].metric("Expected value", money(r.expected_value))
         m[5].metric("Deadline", r.deadline or "Not listed")
         if r.judgement and r.judgement.summary:
-            st.write(r.judgement.summary)
+            st.write(show(r.judgement.summary))
         for f in r.flags:
-            st.markdown(f"- ⚠️ {f}")
+            st.markdown(f"- ⚠️ {show(f)}")
         with st.expander("Why this score — rubric, evidence and eligibility checks"):
             st.table(pd.DataFrame([{"Dimension": l.dimension, "Rating": l.rating, "Points": f"{l.points:g} / {l.max_points:g}",
                                     "Why": l.why} for l in r.rubric]).set_index("Dimension"))
@@ -310,10 +313,13 @@ def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool) -> None:
                                        for e in j.fit_evidence]).set_index("Looking for"))
             if j and (j.strengths or j.gaps):
                 a, b = st.columns(2)
-                a.markdown("**Strengths**\n" + "\n".join(f"- {x}" for x in j.strengths))
-                b.markdown("**Gaps**\n" + "\n".join(f"- {x}" for x in j.gaps))
+                a.markdown("**Strengths**\n" + "\n".join(f"- {show(x)}" for x in j.strengths))
+                b.markdown("**Gaps**\n" + "\n".join(f"- {show(x)}" for x in j.gaps))
             if j and j.essay_reuse in ("full", "partial"):
-                st.info(f"Essay tip: your essay “{j.reusable_essay_title}” looks {j.essay_reuse}ly reusable here.")
+                title = show(j.reusable_essay_title)
+                title = title if title != j.reusable_essay_title else f"“{title}”"   # runs saved before labels
+                how = {"full": "fully", "partial": "partly"}[j.essay_reuse]
+                st.info(f"Essay tip: your essay {title} looks {how} reusable here.")
             req = r.requirements.model_dump(exclude_none=True)
             if req:
                 st.caption("Application needs: " + ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in req.items() if v not in ([], False)))
@@ -374,12 +380,12 @@ def page_chat(pid: str) -> None:
     st.caption("Answers are grounded in the listing and your match analysis. The advisor won't guess facts that "
                "aren't in the listing, and it won't write your essays for you.")
     for t in db.chat_history(pid, key):
-        st.chat_message(t["role"]).write(t["content"])
+        st.chat_message(t["role"]).write(p.show_essay_titles(t["content"]) if p else t["content"])
     q = st.chat_input("e.g. What should I do first? Which essay could I reuse? How does this compare to my other matches?")
     if q:
         st.chat_message("user").write(q)
         with st.chat_message("assistant"), st.spinner("Thinking…"):
-            st.write(ChatAgent(llm(), p, run).ask(key, q))
+            st.write(p.show_essay_titles(ChatAgent(llm(), p, run).ask(key, q)))
 
 
 # ----------------------------------------------------------------------------- data page

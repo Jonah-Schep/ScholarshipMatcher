@@ -27,8 +27,11 @@ SCHOOLS = {  # AcademicWorks portals we scrape -> display name, state
 
 # --- Versions: bump when prompts / rules change so caches invalidate cleanly ---
 RULES_VERSION = "rules-7"
-PROMPT_VERSION = "p2"
+PROMPT_VERSION = "p5"
 RUBRIC_VERSION = "rubric-6"
+# Supervisor acceptance checks (quote length, criterion relevance, the held-out drop check). They change which agent
+# answers are accepted, so they are part of the run fingerprint too.
+CHECKS_VERSION = "checks-2"
 
 # --- Pipeline knobs (all deterministic) --------------------------------------
 MAX_LLM_CANDIDATES = int(os.environ.get("SM_MAX_LLM_CANDIDATES", 30))  # cost cap per run
@@ -38,17 +41,25 @@ LLM_WORKERS = int(os.environ.get("SM_LLM_WORKERS", 6))
 # Provider calls in flight at once across ALL runs in this process (two users matching at the same time share it).
 # VT ARC answers "429 concurrent session limit … max 10 in flight per user" above 10 (WP8, 2026-11-14).
 LLM_MAX_INFLIGHT = int(os.environ.get("SM_LLM_MAX_INFLIGHT", 6))
+# Scorer evidence quotes and Filter "drop" quotes must be at least this long: an 8-character span such as
+# "students" matches almost any listing and proves nothing.
+MIN_EVIDENCE_QUOTE_CHARS = 20
 CHAT_KEEP_TURNS = 8            # recent turns kept verbatim; older ones are compacted
 
 # --- LLM ---------------------------------------------------------------------
 DEFAULT_MODEL = "claude-opus-5-5"
 ROLES = ("extractor", "filter", "scorer", "verifier", "chat")
+# The Verifier checks the Scorer, so by default it runs on a different model: a checker on the same model shares the
+# author's blind spots (correlated errors). Two Claude models are still one family; a different provider for the
+# Verifier would need a per-role provider setting (not built). Applies to the Anthropic provider; the
+# OpenAI-compatible provider has its own default (SM_OPENAI_MODEL). SM_MODEL_<ROLE> overrides either.
+ROLE_DEFAULT_MODELS = {"verifier": "claude-sonnet-5-5"}
 ROLE_EFFORT = {"extractor": "low", "filter": "low", "verifier": "low",
                "scorer": "medium", "chat": "medium"}
 
 
 def model_for(role: str) -> str:
-    return os.environ.get(f"SM_MODEL_{role.upper()}") or DEFAULT_MODEL
+    return os.environ.get(f"SM_MODEL_{role.upper()}") or ROLE_DEFAULT_MODELS.get(role, DEFAULT_MODEL)
 
 
 def llm_provider() -> str:

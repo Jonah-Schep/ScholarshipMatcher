@@ -119,13 +119,25 @@ _PII = [
 ]
 
 
-def redact_pii(text: str, names: tuple[str, ...] = ()) -> str:
-    """Strip direct identifiers before any text leaves the machine."""
+def redact_pii(text: str, names: tuple[str, ...] = (), places: tuple[str, ...] = ()) -> str:
+    """Strip direct identifiers before any text leaves the machine.
+
+    names: the student's name. The full name is always removed. A single part ("Priya") is removed too, unless the
+      text also uses it as an ordinary lowercase word: a student called "Test One" or "Grace" must not turn every
+      "one" or "grace" into "[name]" (live test 2026-11-18). In that case only the full name is removed.
+    places: the student's county, city and high school, removed as whole phrases, longest first ("Blacksburg High
+      School" before "Blacksburg"), so ordinary words such as "high" or "school" elsewhere are left alone."""
     out = text or ""
     for rx, repl in _PII:
         out = rx.sub(repl, out)
+    for place in sorted({squash(p) for p in places if len(squash(p)) > 2}, key=len, reverse=True):
+        out = re.sub(rf"\b{re.escape(place)}\b", "[place]", out, flags=re.I)
     for n in names:
+        n = squash(n)
+        if not n:
+            continue
+        out = re.sub(rf"\b{re.escape(n)}\b", "[name]", out, flags=re.I)
         for part in n.split():
-            if len(part) > 2:
+            if len(part) > 2 and not re.search(rf"\b{re.escape(part.lower())}\b", out):
                 out = re.sub(rf"\b{re.escape(part)}\b", "[name]", out, flags=re.I)
     return out
