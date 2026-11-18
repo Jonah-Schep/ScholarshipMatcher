@@ -207,6 +207,11 @@ snapshots are in `docs/fix_plan.md` ("WPn notes" and "After the plan"); read it 
   `ProfileIn` field also needs adding there and to the form. Live run through the web app (VT ARC, 5-item cap, catalog
   copy, 2026-11-18): essay themes, a 24-call run (about 11 min, no failures), save, chat and audit all worked, and no
   "Essay N" label was shown.
+- Web app look (2026-11-18): "Commons · Ink" theme (dark navy + gold, one dark theme; tokens at the top of
+  `frontend/src/styles.css`; Fraunces + Inter self-hosted via `@fontsource-variable`, no font CDN). Top nav with a
+  profile switcher; new profiles are created on the start page. Matches loads the whole run (`limit=500`) and filters
+  client-side (strong fit / due in 30 days / 2 h or less); cards show chance, effort, essays and due date, with the
+  rubric, evidence and checks behind "Why this match". Mockups: Claude Design canvas "ScholarMatch Redesign Concepts".
 - Offline essay themes (`workers.essay_themes` without a provider) now come from the redacted text, placeholders dropped; before
   2026-11-18 they could contain the student's name or county. Profiles saved offline before then may still carry such
   themes (none in the Windows catalog).

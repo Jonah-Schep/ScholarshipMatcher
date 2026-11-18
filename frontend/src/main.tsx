@@ -9,6 +9,8 @@ import { MatchesPage } from "./pages/MatchesPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { SavedPage } from "./pages/SavedPage";
 import { StartPage } from "./pages/StartPage";
+import "@fontsource-variable/fraunces";
+import "@fontsource-variable/inter";
 import "./styles.css";
 
 // Every page but the start page belongs to one profile: /p/<profile id>/<page>.

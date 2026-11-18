@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { api, type Health, type Meta, unwrap } from "./api/client";
 import { useLoad } from "./lib";
 
@@ -13,12 +12,12 @@ export interface AppContext {
 
 export const useApp = () => useOutletContext<AppContext>();
 
-const PROFILE_ID = /^[a-z0-9_-]{1,40}$/;
+export const PROFILE_ID = /^[a-z0-9_-]{1,40}$/;
 const PAGES = [
-  ["profile", "Profile"],
   ["matches", "Matches"],
   ["saved", "Saved"],
-  ["advisor", "Ask the advisor"],
+  ["advisor", "Advisor"],
+  ["profile", "Profile"],
   ["data", "Data & audit"],
 ] as const;
 
@@ -28,82 +27,66 @@ export function Layout() {
   const meta = useLoad(() => unwrap(api.GET("/api/meta")), []);
   const health = useLoad(() => unwrap(api.GET("/api/health")), []);
   const profiles = useLoad(() => unwrap(api.GET("/api/profiles")), []);
-  const [newId, setNewId] = useState("");
 
   const ready = meta.data && health.data && profiles.data;
   const failed = meta.error ?? health.error ?? profiles.error;
   const known = profiles.data ?? [];
 
-  function createProfile(e: React.FormEvent) {
-    e.preventDefault();
-    const id = newId.trim().toLowerCase();
-    if (!PROFILE_ID.test(id)) return;
-    setNewId("");
-    navigate(`/p/${id}/profile`);
-  }
-
   return (
     <div className="app">
-      <aside className="sidebar">
-        <h1 className="brand">🎓 ScholarMatch</h1>
-        <p className="muted small">Scholarships you can actually win — VA · NC · SC</p>
+      <header className="topbar">
+        <div className="topbar-inner">
+          <Link to="/" className="brand">
+            Scholar<span>Match</span>
+          </Link>
 
-        <label className="field">
-          <span>Profile</span>
-          <select
-            value={pid && known.includes(pid) ? pid : ""}
-            onChange={(e) => e.target.value && navigate(`/p/${e.target.value}/matches`)}
-          >
-            <option value="">{pid && !known.includes(pid) ? `${pid} (not saved yet)` : "Choose…"}</option>
-            {known.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </label>
-        <form onSubmit={createProfile} className="field">
-          <span>New profile</span>
-          <div className="row">
-            <input
-              value={newId}
-              onChange={(e) => setNewId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
-              placeholder="e.g. jonah"
-              maxLength={40}
-              aria-label="New profile name"
-            />
-            <button type="submit" disabled={!PROFILE_ID.test(newId)}>
-              Create
-            </button>
-          </div>
-        </form>
+          {pid && (
+            <nav className="nav" aria-label="Main">
+              {PAGES.map(([path, label]) => (
+                <NavLink key={path} to={`/p/${pid}/${path}`}>
+                  {label}
+                </NavLink>
+              ))}
+            </nav>
+          )}
 
-        {pid && (
-          <nav className="nav">
-            {PAGES.map(([path, label]) => (
-              <NavLink key={path} to={`/p/${pid}/${path}`}>
-                {label}
-              </NavLink>
-            ))}
-          </nav>
-        )}
-
-        {health.data && (
-          <div className="status">
-            {health.data.llm_available ? (
-              <p className="ok">AI agents on · {health.data.llm_name}</p>
-            ) : (
-              <p className="warn">
-                Rule-based mode: no LLM provider configured. Matching works; AI fit review and chat are off.
-              </p>
+          <div className="topbar-right">
+            {health.data && (
+              <span
+                className={`pill ${health.data.llm_available ? "on" : ""}`}
+                title={
+                  health.data.llm_available
+                    ? `AI agents on · ${health.data.llm_name}`
+                    : "No LLM provider configured: matching works, AI fit review and chat are off."
+                }
+              >
+                <span className="dot" />
+                {health.data.llm_available ? "AI review on" : "Rule-based mode"}
+              </span>
             )}
-            <p className="muted small">
-              Catalog: {health.data.catalog_total} scholarships
-              {health.data.catalog_updated && ` · updated ${health.data.catalog_updated.slice(0, 10)}`}
-            </p>
+            <label>
+              <span className="sr-only">Profile</span>
+              <select
+                className="profile-select"
+                value={pid && known.includes(pid) ? pid : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "__new") navigate("/");
+                  else if (v) navigate(`/p/${v}/matches`);
+                }}
+              >
+                <option value="">{pid && !known.includes(pid) ? `${pid} (not saved yet)` : "Choose profile…"}</option>
+                {known.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+                <option value="__new">+ New profile…</option>
+              </select>
+            </label>
           </div>
-        )}
-      </aside>
+        </div>
+      </header>
 
       <main className="content">
         {failed ? (
@@ -129,6 +112,18 @@ export function Layout() {
           />
         )}
       </main>
+
+      {health.data && (
+        <footer className="footer">
+          <div className="footer-inner">
+            <span>
+              Catalog: {health.data.catalog_total.toLocaleString("en-US")} scholarships
+              {health.data.catalog_updated && ` · updated ${health.data.catalog_updated.slice(0, 10)}`} · VA · NC · SC
+            </span>
+            <span>Your profile stays on this computer.</span>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }
