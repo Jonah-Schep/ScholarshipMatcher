@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Keep it current when behaviour, commands or invariants change.
 
 ## What this is
-ScholarMatch: a scholarship matcher for VA/NC/SC students. Python 3.12+, Streamlit UI plus a FastAPI HTTP API
-(for a planned React + TypeScript front end), SQLite, a supervised multi-agent LLM pipeline. Course final project (ADSAI).
+ScholarMatch: a scholarship matcher for VA/NC/SC students. Python 3.12+, two UIs (Streamlit `app.py`; a React + TypeScript web
+app in `frontend/`) over one FastAPI HTTP API, SQLite, a supervised multi-agent LLM pipeline. Course final project (ADSAI).
 Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scraping rules: `scraper-brief.md`.
 
 ## Commands
@@ -29,6 +29,10 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
   `python` on PATH) and `scholarmatch-mac` (`.venv/bin/python`, since `python` is not on PATH on the Mac).
 - API: `python -m scholarmatch.api` → `http://127.0.0.1:8000` (`/docs`, `/openapi.json`); launch config
   `scholarmatch-api`. `SM_API_HOST`, `SM_API_PORT`, `SM_API_CORS_ORIGINS` (default the Vite dev server, :5173).
+- Web app: `cd frontend && npm install && npm run dev` → http://localhost:5173 (proxies `/api` to :8000; launch config
+  `scholarmatch-web`). `npm run build` type-checks and builds. After changing an API route or schema:
+  `python scripts/export_openapi.py`, then `npm run gen:api` (regenerates `src/api/schema.d.ts`), then `npm run typecheck`.
+  TypeScript stays on 5.x: `openapi-typescript` needs the JS compiler API that TypeScript 7 dropped.
 - Sample catalog, offline: `python scripts/load_sample.py`
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
   - Sources: `vt`, `usc`, `ecu` (`scrapers/academicworks.py`), `sc_che` (`scrapers/state_aid.py`), `gsites`,
@@ -132,7 +136,8 @@ Full sequence diagram: `docs/architecture.md`.
 | Prompts and agent contracts | `agents/workers.py`, `models.py` |
 | How Extractor output and rule criteria are merged (grounding, union, rule fallback, `from_rules`) | `workers.to_criteria` / `HARD_FIELDS` |
 | Supervisor checks / retry policy | `agents/supervisor.py` |
-| API route or response shape | `scholarmatch/api/app.py`, `api/schemas.py`, `tests/test_api.py`; logic both front ends need goes in `profile_io.py` / `run_summary.py` |
+| API route or response shape | `scholarmatch/api/app.py`, `api/schemas.py`, `tests/test_api.py`; logic both front ends need goes in `profile_io.py` / `run_summary.py`; then regenerate the web app's types |
+| Web app page or component | `frontend/src/pages/`, `frontend/src/components/`; routes in `frontend/src/main.tsx` |
 | New scraper | new module in `scrapers/`, register in `scrapers/runner.py`, add a trimmed real fixture + parser test |
 
 ## Testing notes
@@ -151,7 +156,7 @@ Full sequence diagram: `docs/architecture.md`.
 ## Current state (update as work lands)
 Fix plan WP0–WP8 are done (WP6 apart from the supplement values). History, dated live-run findings and catalog
 snapshots are in `docs/fix_plan.md` ("WPn notes" and "After the plan"); read it before changing a rule below.
-- Tests: 251 collected = 247 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
+- Tests: 252 collected = 248 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
 - Versions: `rules-7`, `p5`, `rubric-6`, `checks-2`.
 - Catalog: sizes differ by machine and change with each scrape; check `GET /api/catalog/stats` or the Data & audit page.
 - Behaviour that is easy to miss when reading one file:
@@ -194,11 +199,22 @@ snapshots are in `docs/fix_plan.md` ("WPn notes" and "After the plan"); read it 
 - Live check 2026-11-18 (VT ARC, `SM_MAX_LLM_CANDIDATES=5`, catalog copy): Streamlit in a browser and the API each ran
   essay upload, a match run (16-17 calls, about 5 min), save, chat and audit. One Verifier invalid-JSON `llm_failure`
   fell back as designed. A rubric reason quoted "Essay 1"; `for_display` now maps every agent-worded field.
+- Web app (`frontend/`, 2026-11-18): every page checked in a browser against a catalog copy (AI off, plus a slowed
+  stand-in model for live progress), incl. a phone-width pass. A run is followed over SSE, picked up again after a page
+  reload (job id in sessionStorage) and checked every 15 s by a watchdog, because Vite's dev proxy keeps the stream
+  open after the API dies. Pages remount per profile (`<Outlet key={pid}>`). No automated front-end tests yet;
+  `npm run build` is the check. The profile form sends only the fields it knows (`EMPTY` in `ProfilePage.tsx`): a new
+  `ProfileIn` field also needs adding there and to the form. Live run through the web app (VT ARC, 5-item cap, catalog
+  copy, 2026-11-18): essay themes, a 24-call run (about 11 min, no failures), save, chat and audit all worked, and no
+  "Essay N" label was shown.
+- Offline essay themes (`workers.essay_themes` without a provider) now come from the redacted text, placeholders dropped; before
+  2026-11-18 they could contain the student's name or county. Profiles saved offline before then may still carry such
+  themes (none in the Windows catalog).
 - Live LLM: VT ARC (`openai_compat`) works but is slow (30-item run 10–15 min; Extractor 20–60 s per answer) and
   returns 429 above 10 calls in flight per user. Timeouts are not retried; 429 / 5xx back off 5/10/20 s
   (`openai_compat.call_with_backoff`, `SM_OPENAI_TIMEOUT` 300 s). After any live run, check the **Data & audit** page
   (checked after a live run, 2026-11-18) for `rejected` / `llm_failure` / `item_error` events.
-- Not built: the React front end (the API is ready for it), BigFuture (terms unconfirmed), CareerOneStop (needs the user's API credentials), embedded Google Docs on
+- Not built: BigFuture (terms unconfirmed), CareerOneStop (needs the user's API credentials), embedded Google Docs on
   counselor pages, PDF rule extraction (replaced by the hand-typed supplement).
 
 ## Still to fix

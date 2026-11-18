@@ -41,6 +41,18 @@ The API returns the student's own profile (name, location) and has no login, so 
 that way unless you add authentication. `SM_API_HOST`, `SM_API_PORT` and `SM_API_CORS_ORIGINS` (default: the Vite dev
 server on port 5173) change the defaults.
 
+### Web app (React + TypeScript)
+
+`frontend/` is a custom web app on top of the API. With the API running:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173. See [frontend/README.md](frontend/README.md).
+
 ## Configuration (`.env`, copy from `.env.example`)
 
 | Setting | Purpose |
@@ -98,6 +110,7 @@ pipeline, and a scripted fake model for the agents (no network, no key).
 
 ```
 app.py                     Streamlit UI
+frontend/                  React + TypeScript web app (talks to the HTTP API)
 scholarmatch/
   config.py  models.py  db.py  textutil.py
   llm/                     provider interface + response cache; anthropic, openai_compat, offline

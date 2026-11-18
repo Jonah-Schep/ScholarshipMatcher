@@ -1315,3 +1315,17 @@ def test_essay_themes_call_sends_neither_title_nor_local_places():
     essay_themes(Capture(), "Priya_robotics_essay.txt", "At Blacksburg High School our robot curved.",
                  ("Priya Patel",), ("Montgomery", "Blacksburg", "Blacksburg High School"))
     assert "Priya" not in Capture.sent and "Blacksburg" not in Capture.sent and "robot curved" in Capture.sent
+
+
+def test_offline_essay_themes_carry_no_name_or_place():
+    """Offline themes are stored on the profile and later reach every agent through redacted_view (2026-11-18)."""
+    from scholarmatch.agents.workers import essay_themes
+    from scholarmatch.llm import OfflineLLM
+
+    themes = essay_themes(OfflineLLM(), "Morgan_essay.txt",
+                          "I am Morgan Webcheck from Arlington. Arlington tutoring taught Morgan patience and leadership.",
+                          ("Morgan Webcheck",), ("Arlington", "Reston", "Yorktown High School"))
+    assert themes and not {"morgan", "webcheck", "arlington", "name", "place"} & set(themes)
+    assert "leadership" in themes
+    contact = essay_themes(OfflineLLM(), "e.txt", "Write to morgan@example.org or call 540-555-0100 about leadership.")
+    assert not {"email", "phone", "example"} & set(contact) and "leadership" in contact

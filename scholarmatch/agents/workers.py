@@ -14,6 +14,7 @@ Shared rules baked into every prompt:
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from ..ingest import extract_rules
@@ -307,10 +308,14 @@ def essay_themes(llm: LLM, title: str, text: str, names: tuple[str, ...] = (),
     """Essays never go to the matching agents; only these themes do. This one call does send the essay text to the
     provider, with the student's name, contact details and local places (county, city, high school) removed first.
     The title (a file name, which can carry the student's name) is not sent."""
+    clean = redact_pii(text, names, places)
     if not llm.available:
+        # Themes go to every agent later (redacted_view), so the offline themes must come from the redacted text too:
+        # built from the raw text they carried the student's name and county (browser check, 2026-11-18).
         from ..matching.rubric import _tokens
-        words = sorted(_tokens(text), key=lambda w: (-text.lower().count(w), w))
+        plain = re.sub(r"\[[a-z]+\]", " ", clean)            # drop "[name]", "[place]", "[email]", "[phone]" …
+        words = sorted(_tokens(plain), key=lambda w: (-plain.lower().count(w), w))
         return words[:6]
     out: Optional[EssayThemes] = llm.structured(
-        "extractor", THEMES_SYSTEM, f"<essay>\n{redact_pii(text, names, places)}\n</essay>", EssayThemes)
+        "extractor", THEMES_SYSTEM, f"<essay>\n{clean}\n</essay>", EssayThemes)
     return out.themes[:6]

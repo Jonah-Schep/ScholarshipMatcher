@@ -1,0 +1,2611 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "ScholarMatch API",
+  "description": "Scholarship matching for VA / NC / SC students. Local use only (no authentication).",
+  "version": "1.0"
+ },
+ "paths": {
+  "/api/health": {
+   "get": {
+    "tags": [
+     "status"
+    ],
+    "summary": "Health",
+    "operationId": "health_api_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Health"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/meta": {
+   "get": {
+    "tags": [
+     "status"
+    ],
+    "summary": "Meta",
+    "operationId": "meta_api_meta_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Meta"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/catalog/stats": {
+   "get": {
+    "tags": [
+     "status"
+    ],
+    "summary": "Catalog Stats",
+    "operationId": "catalog_stats_api_catalog_stats_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Catalog Stats Api Catalog Stats Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles": {
+   "get": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "List Profiles",
+    "operationId": "list_profiles_api_profiles_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array",
+         "title": "Response List Profiles Api Profiles Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}": {
+   "get": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "Get Profile",
+    "operationId": "get_profile_api_profiles__pid__get",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ProfileOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "Put Profile",
+    "description": "Create or replace a profile. Essays already on file are kept (manage them with the essay endpoints).",
+    "operationId": "put_profile_api_profiles__pid__put",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProfileIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ProfileOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "Delete Profile",
+    "description": "Erase the profile, saved scholarships, match history and chats from this computer.",
+    "operationId": "delete_profile_api_profiles__pid__delete",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/essays": {
+   "post": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "Upload Essays",
+    "description": "Add .txt / .pdf essays. Each one's text is sent to the AI once, with the student's name, county, city and\nhigh school removed, to pull out themes. Problems with single files come back as `warnings`.",
+    "operationId": "upload_essays_api_profiles__pid__essays_post",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_upload_essays_api_profiles__pid__essays_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EssayUploadOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/essays/{index}": {
+   "delete": {
+    "tags": [
+     "profiles"
+    ],
+    "summary": "Delete Essay",
+    "operationId": "delete_essay_api_profiles__pid__essays__index__delete",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "index",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Index"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ProfileOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/runs": {
+   "post": {
+    "tags": [
+     "runs"
+    ],
+    "summary": "Start Run",
+    "description": "Start a match run in the background (or return the one already running for this profile). If the profile,\ncatalog and settings are unchanged since today's stored run, that run is reused and the job finishes at once\n(unless `force`).",
+    "operationId": "start_run_api_profiles__pid__runs_post",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RunRequest",
+        "default": {
+         "force": false
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}": {
+   "get": {
+    "tags": [
+     "runs"
+    ],
+    "summary": "Get Job",
+    "operationId": "get_job_api_jobs__job_id__get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/events": {
+   "get": {
+    "tags": [
+     "runs"
+    ],
+    "summary": "Job Events",
+    "description": "Server-sent events: one `progress` event per change, then a final `done` or `error` event. Each event's\ndata is the Job as JSON.",
+    "operationId": "job_events_api_jobs__job_id__events_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/runs/latest": {
+   "get": {
+    "tags": [
+     "runs"
+    ],
+    "summary": "Latest Run",
+    "operationId": "latest_run_api_profiles__pid__runs_latest_get",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "sort",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "description": "One of `GET /api/meta` \u2192 sorts.",
+       "default": "Best overall match",
+       "title": "Sort"
+      },
+      "description": "One of `GET /api/meta` \u2192 sorts."
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Default: SM_MAX_RESULTS.",
+       "title": "Limit"
+      },
+      "description": "Default: SM_MAX_RESULTS."
+     },
+     {
+      "name": "hide_unverified",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Leave out items with a Verify / Check flag.",
+       "default": false,
+       "title": "Hide Unverified"
+      },
+      "description": "Leave out items with a Verify / Check flag."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RunView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/runs/{run_id}/audit": {
+   "get": {
+    "tags": [
+     "runs"
+    ],
+    "summary": "Run Audit",
+    "description": "Every Supervisor accept / reject decision for one run (the \"Data & audit\" page).",
+    "operationId": "run_audit_api_runs__run_id__audit_get",
+    "parameters": [
+     {
+      "name": "run_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Run Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response Run Audit Api Runs  Run Id  Audit Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/scholarships/{key}": {
+   "get": {
+    "tags": [
+     "scholarships"
+    ],
+    "summary": "Get Scholarship",
+    "operationId": "get_scholarship_api_scholarships__key__get",
+    "parameters": [
+     {
+      "name": "key",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Key"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Scholarship"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/saved": {
+   "get": {
+    "tags": [
+     "saved"
+    ],
+    "summary": "List Saved",
+    "operationId": "list_saved_api_profiles__pid__saved_get",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/SavedOut"
+         },
+         "title": "Response List Saved Api Profiles  Pid  Saved Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/saved/{key}": {
+   "put": {
+    "tags": [
+     "saved"
+    ],
+    "summary": "Save",
+    "description": "Save a scholarship or change its status / note. A new save keeps a snapshot of the latest match result\n(or of the catalog row if it is not in the latest run).",
+    "operationId": "save_api_profiles__pid__saved__key__put",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "key",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SavedIn",
+        "default": {
+         "status": "interested",
+         "note": ""
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SavedOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "saved"
+    ],
+    "summary": "Unsave",
+    "operationId": "unsave_api_profiles__pid__saved__key__delete",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "key",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Key"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/profiles/{pid}/chat/{key}": {
+   "get": {
+    "tags": [
+     "chat"
+    ],
+    "summary": "Chat History",
+    "operationId": "chat_history_api_profiles__pid__chat__key__get",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "key",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Key"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/ChatTurn"
+         },
+         "title": "Response Chat History Api Profiles  Pid  Chat  Key  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "chat"
+    ],
+    "summary": "Chat",
+    "description": "Ask the advisor about one scholarship. Answers are grounded in the listing and the stored match analysis.",
+    "operationId": "chat_api_profiles__pid__chat__key__post",
+    "parameters": [
+     {
+      "name": "pid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9_-]{1,40}$",
+       "description": "Lower-case letters, digits, '_' or '-'.",
+       "title": "Pid"
+      },
+      "description": "Lower-case letters, digits, '_' or '-'."
+     },
+     {
+      "name": "key",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChatIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Body_upload_essays_api_profiles__pid__essays_post": {
+    "properties": {
+     "files": {
+      "items": {
+       "type": "string",
+       "contentMediaType": "application/octet-stream"
+      },
+      "type": "array",
+      "title": "Files"
+     }
+    },
+    "type": "object",
+    "required": [
+     "files"
+    ],
+    "title": "Body_upload_essays_api_profiles__pid__essays_post"
+   },
+   "ChatIn": {
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Question"
+     }
+    },
+    "type": "object",
+    "required": [
+     "question"
+    ],
+    "title": "ChatIn"
+   },
+   "ChatOut": {
+    "properties": {
+     "answer": {
+      "type": "string",
+      "title": "Answer"
+     }
+    },
+    "type": "object",
+    "required": [
+     "answer"
+    ],
+    "title": "ChatOut"
+   },
+   "ChatTurn": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "role": {
+      "type": "string",
+      "title": "Role"
+     },
+     "content": {
+      "type": "string",
+      "title": "Content",
+      "description": "Essay titles shown as the student named them."
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "role",
+     "content"
+    ],
+    "title": "ChatTurn"
+   },
+   "Essay": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     },
+     "themes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Themes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "title",
+     "text"
+    ],
+    "title": "Essay"
+   },
+   "EssayOut": {
+    "properties": {
+     "index": {
+      "type": "integer",
+      "title": "Index"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "themes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Themes"
+     },
+     "chars": {
+      "type": "integer",
+      "title": "Chars"
+     }
+    },
+    "type": "object",
+    "required": [
+     "index",
+     "title",
+     "themes",
+     "chars"
+    ],
+    "title": "EssayOut",
+    "description": "An essay on file. The text stays on the server; the front end only needs the title and themes."
+   },
+   "EssayUploadOut": {
+    "properties": {
+     "profile": {
+      "$ref": "#/components/schemas/StudentProfile",
+      "description": "The stored profile with essay text removed (see `essays`)."
+     },
+     "essays": {
+      "items": {
+       "$ref": "#/components/schemas/EssayOut"
+      },
+      "type": "array",
+      "title": "Essays"
+     },
+     "warnings": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Warnings"
+     }
+    },
+    "type": "object",
+    "required": [
+     "profile",
+     "essays",
+     "warnings"
+    ],
+    "title": "EssayUploadOut"
+   },
+   "Exclusion": {
+    "properties": {
+     "scholarship_key": {
+      "type": "string",
+      "title": "Scholarship Key"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "stage": {
+      "type": "string",
+      "enum": [
+       "sql",
+       "hard_filter",
+       "fuzzy_filter",
+       "preference",
+       "cap"
+      ],
+      "title": "Stage"
+     },
+     "reason": {
+      "type": "string",
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "scholarship_key",
+     "name",
+     "stage",
+     "reason"
+    ],
+    "title": "Exclusion"
+   },
+   "FilterVerdict": {
+    "properties": {
+     "verdict": {
+      "type": "string",
+      "enum": [
+       "keep",
+       "drop",
+       "uncertain"
+      ],
+      "title": "Verdict"
+     },
+     "reason": {
+      "type": "string",
+      "title": "Reason"
+     },
+     "scholarship_quote": {
+      "type": "string",
+      "title": "Scholarship Quote"
+     }
+    },
+    "type": "object",
+    "required": [
+     "verdict",
+     "reason",
+     "scholarship_quote"
+    ],
+    "title": "FilterVerdict",
+    "description": "Fuzzy-filter agent output for ONE scholarship."
+   },
+   "FitEvidence": {
+    "properties": {
+     "criterion": {
+      "type": "string",
+      "title": "Criterion"
+     },
+     "scholarship_quote": {
+      "type": "string",
+      "title": "Scholarship Quote"
+     },
+     "student_evidence": {
+      "type": "string",
+      "title": "Student Evidence"
+     },
+     "met": {
+      "type": "boolean",
+      "title": "Met"
+     }
+    },
+    "type": "object",
+    "required": [
+     "criterion",
+     "scholarship_quote",
+     "student_evidence",
+     "met"
+    ],
+    "title": "FitEvidence"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "HardCheck": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "result": {
+      "type": "string",
+      "enum": [
+       "pass",
+       "fail",
+       "unknown"
+      ],
+      "title": "Result"
+     },
+     "detail": {
+      "type": "string",
+      "title": "Detail"
+     },
+     "weight": {
+      "type": "string",
+      "enum": [
+       "normal",
+       "restrictive"
+      ],
+      "title": "Weight",
+      "default": "normal"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "result",
+     "detail"
+    ],
+    "title": "HardCheck"
+   },
+   "Health": {
+    "properties": {
+     "llm_available": {
+      "type": "boolean",
+      "title": "Llm Available"
+     },
+     "llm_name": {
+      "type": "string",
+      "title": "Llm Name"
+     },
+     "catalog_total": {
+      "type": "integer",
+      "title": "Catalog Total"
+     },
+     "catalog_updated": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Catalog Updated"
+     }
+    },
+    "type": "object",
+    "required": [
+     "llm_available",
+     "llm_name",
+     "catalog_total",
+     "catalog_updated"
+    ],
+    "title": "Health"
+   },
+   "Job": {
+    "properties": {
+     "job_id": {
+      "type": "string",
+      "title": "Job Id"
+     },
+     "profile_id": {
+      "type": "string",
+      "title": "Profile Id"
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "queued",
+       "running",
+       "done",
+       "error"
+      ],
+      "title": "State"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message",
+      "default": ""
+     },
+     "fraction": {
+      "type": "number",
+      "title": "Fraction",
+      "default": 0
+     },
+     "run_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Id"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "job_id",
+     "profile_id",
+     "state"
+    ],
+    "title": "Job"
+   },
+   "MatchResult": {
+    "properties": {
+     "scholarship_key": {
+      "type": "string",
+      "title": "Scholarship Key"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "url": {
+      "type": "string",
+      "title": "Url"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "sponsor": {
+      "type": "string",
+      "title": "Sponsor",
+      "default": ""
+     },
+     "amount_display": {
+      "type": "string",
+      "title": "Amount Display",
+      "default": ""
+     },
+     "amount_value": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Amount Value"
+     },
+     "deadline": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Deadline"
+     },
+     "open_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Date"
+     },
+     "hard_checks": {
+      "items": {
+       "$ref": "#/components/schemas/HardCheck"
+      },
+      "type": "array",
+      "title": "Hard Checks"
+     },
+     "filter_verdict": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FilterVerdict"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "judgement": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ScoreJudgement"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "rubric": {
+      "items": {
+       "$ref": "#/components/schemas/RubricLine"
+      },
+      "type": "array",
+      "title": "Rubric"
+     },
+     "match_score": {
+      "type": "number",
+      "title": "Match Score",
+      "default": 0
+     },
+     "win_probability": {
+      "type": "number",
+      "title": "Win Probability",
+      "default": 0
+     },
+     "effort_hours": {
+      "type": "number",
+      "title": "Effort Hours",
+      "default": 0
+     },
+     "ease": {
+      "type": "number",
+      "title": "Ease",
+      "default": 0
+     },
+     "expected_value": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expected Value"
+     },
+     "requirements": {
+      "$ref": "#/components/schemas/Requirements"
+     },
+     "application_method": {
+      "type": "string",
+      "title": "Application Method",
+      "default": "unknown"
+     },
+     "flags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Flags"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "llm",
+       "heuristic"
+      ],
+      "title": "Mode",
+      "default": "llm"
+     }
+    },
+    "type": "object",
+    "required": [
+     "scholarship_key",
+     "name",
+     "url",
+     "source"
+    ],
+    "title": "MatchResult"
+   },
+   "Meta": {
+    "properties": {
+     "levels": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Levels"
+     },
+     "schools": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Schools"
+     },
+     "sorts": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Sorts"
+     },
+     "saved_statuses": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Saved Statuses"
+     },
+     "max_results": {
+      "type": "integer",
+      "title": "Max Results"
+     }
+    },
+    "type": "object",
+    "required": [
+     "levels",
+     "schools",
+     "sorts",
+     "saved_statuses",
+     "max_results"
+    ],
+    "title": "Meta",
+    "description": "Option lists for the front end's forms, so it never hard-codes them."
+   },
+   "ProfileIn": {
+    "properties": {
+     "display_name": {
+      "type": "string",
+      "title": "Display Name",
+      "default": ""
+     },
+     "state": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}$",
+      "title": "State",
+      "default": "VA"
+     },
+     "county": {
+      "type": "string",
+      "title": "County",
+      "default": ""
+     },
+     "city": {
+      "type": "string",
+      "title": "City",
+      "default": ""
+     },
+     "high_school": {
+      "type": "string",
+      "title": "High School",
+      "default": ""
+     },
+     "level": {
+      "type": "string",
+      "enum": [
+       "hs_senior",
+       "undergrad",
+       "graduate"
+      ],
+      "title": "Level",
+      "default": "hs_senior"
+     },
+     "class_year": {
+      "type": "string",
+      "title": "Class Year",
+      "default": ""
+     },
+     "gpa": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 4.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gpa"
+     },
+     "current_school": {
+      "type": "string",
+      "title": "Current School",
+      "default": ""
+     },
+     "intended_schools": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Intended Schools"
+     },
+     "majors": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Majors"
+     },
+     "pell_eligible": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pell Eligible"
+     },
+     "financial_need": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Financial Need"
+     },
+     "us_citizen_or_resident": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Us Citizen Or Resident",
+      "default": true
+     },
+     "gender": {
+      "type": "string",
+      "title": "Gender",
+      "default": ""
+     },
+     "ethnicities": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Ethnicities"
+     },
+     "disability": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Disability"
+     },
+     "first_generation": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "First Generation"
+     },
+     "military_affiliation": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Military Affiliation"
+     },
+     "affiliations": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Affiliations"
+     },
+     "no_special_affiliations": {
+      "type": "boolean",
+      "title": "No Special Affiliations",
+      "default": false
+     },
+     "age": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 120.0,
+        "minimum": 1.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age"
+     },
+     "activities": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Activities"
+     },
+     "interests": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Interests"
+     },
+     "awards_won": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Awards Won"
+     },
+     "no_essay_only": {
+      "type": "boolean",
+      "title": "No Essay Only",
+      "default": false
+     },
+     "min_award": {
+      "type": "number",
+      "minimum": 0.0,
+      "title": "Min Award",
+      "default": 0
+     },
+     "max_effort_hours": {
+      "anyOf": [
+       {
+        "type": "number",
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Effort Hours"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "title": "ProfileIn",
+    "description": "Every editable profile field except essays, which have their own endpoints. Unset fields take the defaults\nof `StudentProfile`. `state` is a two-letter code; use \"XX\" for a state outside VA / NC / SC."
+   },
+   "ProfileOut": {
+    "properties": {
+     "profile": {
+      "$ref": "#/components/schemas/StudentProfile",
+      "description": "The stored profile with essay text removed (see `essays`)."
+     },
+     "essays": {
+      "items": {
+       "$ref": "#/components/schemas/EssayOut"
+      },
+      "type": "array",
+      "title": "Essays"
+     }
+    },
+    "type": "object",
+    "required": [
+     "profile",
+     "essays"
+    ],
+    "title": "ProfileOut"
+   },
+   "Requirements": {
+    "properties": {
+     "essay_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Essay Count"
+     },
+     "recommendation_letters": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommendation Letters"
+     },
+     "transcript": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transcript"
+     },
+     "interview": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Interview"
+     },
+     "fafsa": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fafsa"
+     },
+     "portfolio_or_audition": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Portfolio Or Audition"
+     },
+     "other": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Other"
+     }
+    },
+    "type": "object",
+    "title": "Requirements"
+   },
+   "RubricLine": {
+    "properties": {
+     "dimension": {
+      "type": "string",
+      "title": "Dimension"
+     },
+     "rating": {
+      "type": "string",
+      "title": "Rating"
+     },
+     "points": {
+      "type": "number",
+      "title": "Points"
+     },
+     "max_points": {
+      "type": "number",
+      "title": "Max Points"
+     },
+     "why": {
+      "type": "string",
+      "title": "Why"
+     }
+    },
+    "type": "object",
+    "required": [
+     "dimension",
+     "rating",
+     "points",
+     "max_points",
+     "why"
+    ],
+    "title": "RubricLine"
+   },
+   "RunRequest": {
+    "properties": {
+     "force": {
+      "type": "boolean",
+      "title": "Force",
+      "description": "Ignore the stored result for today and run again.",
+      "default": false
+     }
+    },
+    "type": "object",
+    "title": "RunRequest"
+   },
+   "RunView": {
+    "properties": {
+     "run_id": {
+      "type": "string",
+      "title": "Run Id"
+     },
+     "profile_id": {
+      "type": "string",
+      "title": "Profile Id"
+     },
+     "as_of": {
+      "type": "string",
+      "title": "As Of"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "llm",
+       "heuristic"
+      ],
+      "title": "Mode"
+     },
+     "review_mode": {
+      "type": "string",
+      "title": "Review Mode",
+      "description": "Plain-language label such as \"AI-reviewed (12 of 15)\"."
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "description": "The profile, catalog or settings changed since this run."
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "stats": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Stats"
+     },
+     "total_results": {
+      "type": "integer",
+      "title": "Total Results"
+     },
+     "results": {
+      "items": {
+       "$ref": "#/components/schemas/MatchResult"
+      },
+      "type": "array",
+      "title": "Results",
+      "description": "Sorted and filtered; essay titles shown as the student named them."
+     },
+     "exclusion_counts": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Exclusion Counts"
+     },
+     "exclusions": {
+      "items": {
+       "$ref": "#/components/schemas/Exclusion"
+      },
+      "type": "array",
+      "title": "Exclusions"
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_id",
+     "profile_id",
+     "as_of",
+     "mode",
+     "review_mode",
+     "stale",
+     "created_at",
+     "stats",
+     "total_results",
+     "results",
+     "exclusion_counts",
+     "exclusions"
+    ],
+    "title": "RunView"
+   },
+   "SavedIn": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "interested",
+       "applying",
+       "submitted",
+       "won",
+       "not selected"
+      ],
+      "title": "Status",
+      "default": "interested"
+     },
+     "note": {
+      "type": "string",
+      "title": "Note",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "title": "SavedIn"
+   },
+   "SavedOut": {
+    "properties": {
+     "key": {
+      "type": "string",
+      "title": "Key"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "note": {
+      "type": "string",
+      "title": "Note"
+     },
+     "saved_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Saved At"
+     },
+     "snapshot": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Snapshot"
+     },
+     "ended": {
+      "type": "boolean",
+      "title": "Ended",
+      "description": "The award has closed since it was saved."
+     }
+    },
+    "type": "object",
+    "required": [
+     "key",
+     "status",
+     "note",
+     "saved_at",
+     "snapshot",
+     "ended"
+    ],
+    "title": "SavedOut"
+   },
+   "Scholarship": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "source_id": {
+      "type": "string",
+      "title": "Source Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "url": {
+      "type": "string",
+      "title": "Url",
+      "default": ""
+     },
+     "school": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "School"
+     },
+     "region": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Region"
+     },
+     "geo_scope": {
+      "type": "string",
+      "enum": [
+       "national",
+       "nc",
+       "va",
+       "sc",
+       "multi_state",
+       "other_state"
+      ],
+      "title": "Geo Scope",
+      "default": "national"
+     },
+     "sponsor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sponsor"
+     },
+     "amount_raw": {
+      "type": "string",
+      "title": "Amount Raw",
+      "default": ""
+     },
+     "amount_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Amount Min"
+     },
+     "amount_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Amount Max"
+     },
+     "deadline_raw": {
+      "type": "string",
+      "title": "Deadline Raw",
+      "default": ""
+     },
+     "deadline": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Deadline"
+     },
+     "open_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Date"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "open",
+       "ended",
+       "unknown"
+      ],
+      "title": "Status",
+      "default": "unknown"
+     },
+     "description": {
+      "type": "string",
+      "title": "Description",
+      "default": ""
+     },
+     "eligibility": {
+      "type": "string",
+      "title": "Eligibility",
+      "default": ""
+     },
+     "college_or_department": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "College Or Department"
+     },
+     "sources": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Sources"
+     },
+     "confidence": {
+      "type": "string",
+      "enum": [
+       "high",
+       "medium",
+       "low"
+      ],
+      "title": "Confidence",
+      "default": "high"
+     },
+     "raw_text": {
+      "type": "string",
+      "title": "Raw Text",
+      "default": ""
+     },
+     "extra": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Extra"
+     },
+     "scraped_at": {
+      "type": "string",
+      "title": "Scraped At",
+      "default": ""
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "source_id",
+     "name"
+    ],
+    "title": "Scholarship",
+    "description": "Shared output schema from scraper-brief.md (one row per award)."
+   },
+   "ScoreJudgement": {
+    "properties": {
+     "fit": {
+      "type": "string",
+      "enum": [
+       "strong",
+       "moderate",
+       "weak",
+       "none"
+      ],
+      "title": "Fit"
+     },
+     "fit_evidence": {
+      "items": {
+       "$ref": "#/components/schemas/FitEvidence"
+      },
+      "type": "array",
+      "title": "Fit Evidence"
+     },
+     "essay_reuse": {
+      "type": "string",
+      "enum": [
+       "full",
+       "partial",
+       "none",
+       "not_applicable"
+      ],
+      "title": "Essay Reuse"
+     },
+     "reusable_essay_title": {
+      "type": "string",
+      "title": "Reusable Essay Title"
+     },
+     "strengths": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Strengths"
+     },
+     "gaps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Gaps"
+     },
+     "summary": {
+      "type": "string",
+      "title": "Summary"
+     }
+    },
+    "type": "object",
+    "required": [
+     "fit",
+     "fit_evidence",
+     "essay_reuse",
+     "reusable_essay_title",
+     "strengths",
+     "gaps",
+     "summary"
+    ],
+    "title": "ScoreJudgement",
+    "description": "Scorer agent output for ONE scholarship: categorical only, no numbers."
+   },
+   "StudentProfile": {
+    "properties": {
+     "profile_id": {
+      "type": "string",
+      "title": "Profile Id"
+     },
+     "display_name": {
+      "type": "string",
+      "title": "Display Name",
+      "default": ""
+     },
+     "state": {
+      "type": "string",
+      "title": "State",
+      "default": "VA"
+     },
+     "county": {
+      "type": "string",
+      "title": "County",
+      "default": ""
+     },
+     "city": {
+      "type": "string",
+      "title": "City",
+      "default": ""
+     },
+     "high_school": {
+      "type": "string",
+      "title": "High School",
+      "default": ""
+     },
+     "level": {
+      "type": "string",
+      "enum": [
+       "hs_senior",
+       "undergrad",
+       "graduate"
+      ],
+      "title": "Level",
+      "default": "hs_senior"
+     },
+     "class_year": {
+      "type": "string",
+      "title": "Class Year",
+      "default": ""
+     },
+     "gpa": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gpa"
+     },
+     "current_school": {
+      "type": "string",
+      "title": "Current School",
+      "default": ""
+     },
+     "intended_schools": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Intended Schools"
+     },
+     "majors": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Majors"
+     },
+     "pell_eligible": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pell Eligible"
+     },
+     "financial_need": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Financial Need"
+     },
+     "us_citizen_or_resident": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Us Citizen Or Resident",
+      "default": true
+     },
+     "gender": {
+      "type": "string",
+      "title": "Gender",
+      "default": ""
+     },
+     "ethnicities": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Ethnicities"
+     },
+     "disability": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Disability"
+     },
+     "first_generation": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "First Generation"
+     },
+     "military_affiliation": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Military Affiliation"
+     },
+     "affiliations": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Affiliations"
+     },
+     "no_special_affiliations": {
+      "type": "boolean",
+      "title": "No Special Affiliations",
+      "default": false
+     },
+     "age": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age"
+     },
+     "activities": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Activities"
+     },
+     "interests": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Interests"
+     },
+     "awards_won": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Awards Won"
+     },
+     "essays": {
+      "items": {
+       "$ref": "#/components/schemas/Essay"
+      },
+      "type": "array",
+      "title": "Essays"
+     },
+     "no_essay_only": {
+      "type": "boolean",
+      "title": "No Essay Only",
+      "default": false
+     },
+     "min_award": {
+      "type": "number",
+      "title": "Min Award",
+      "default": 0
+     },
+     "max_effort_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Effort Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "profile_id"
+    ],
+    "title": "StudentProfile"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  }
+ }
+}
