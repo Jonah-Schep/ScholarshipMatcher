@@ -1,20 +1,20 @@
 """ScholarMatch — Streamlit front end.     Run:  streamlit run app.py"""
 from __future__ import annotations
 
-import io
 import re
 
 import pandas as pd
 import streamlit as st
 
 from scholarmatch import config, db
-from scholarmatch.agents import workers
 from scholarmatch.agents.chat import ChatAgent
 from scholarmatch.agents.supervisor import Supervisor
 from scholarmatch.llm import get_llm
 from scholarmatch.matching import rubric
-from scholarmatch.models import Essay, MatchResult, StudentProfile
-from scholarmatch.run_summary import review_mode_label
+from scholarmatch.models import MatchResult, StudentProfile
+from scholarmatch.profile_io import add_essays, split_lines
+from scholarmatch.run_summary import (exclusion_counts, exclusions_for_display, for_display, needs_verification,
+                                      review_mode_label)
 from scholarmatch.textutil import is_zero_amount, money
 
 st.set_page_config(page_title="ScholarMatch", page_icon="🎓", layout="wide")
@@ -32,8 +32,7 @@ def llm():
     return get_llm()
 
 
-def lines(text: str) -> list[str]:
-    return [x.strip() for x in re.split(r"[\n;]+", text or "") if x.strip()]
+lines = split_lines
 
 
 def yn_index(value) -> int:
@@ -146,17 +145,7 @@ def page_profile(pid: str) -> None:
 
     if submitted:
         essays = [e for e in p.essays if e.title in keep]
-        for up in uploads or []:
-            text = read_upload(up)
-            if text and up.name not in [e.title for e in essays]:
-                with st.spinner(f"Reading {up.name}…"):
-                    try:
-                        themes = workers.essay_themes(llm(), up.name, text, (display_name,), (county, city, high_school))
-                    except Exception as e:
-                        themes = []
-                        st.warning(f"Couldn't summarise {up.name} ({e}); saved without themes.")
-                essays.append(Essay(title=up.name, text=text, themes=themes))
-        db.save_profile(StudentProfile(
+        new = StudentProfile(
             profile_id=pid, display_name=display_name, level=level, class_year=class_year,
             state=state if state != "Other" else "XX", county=county, city=city, high_school=high_school,
             gpa=gpa or None, current_school=current, intended_schools=intended,
@@ -165,7 +154,12 @@ def page_profile(pid: str) -> None:
             activities=lines(activities), interests=lines(interests), awards_won=lines(awards),
             gender=gender, ethnicities=eth, first_generation=YES_NO[first_gen], disability=YES_NO[disability],
             military_affiliation=YES_NO[military], us_citizen_or_resident=YES_NO[citizen],
-            affiliations=lines(affiliations), no_special_affiliations=no_special, age=int(age) or None, essays=essays))
+            affiliations=lines(affiliations), no_special_affiliations=no_special, age=int(age) or None, essays=essays)
+        if uploads:
+            with st.spinner("Reading your essays…"):
+                new, warnings = add_essays(llm(), new, [(up.name, up.getvalue()) for up in uploads])
+            st.session_state["profile_warnings"] = warnings          # shown after the rerun below
+        db.save_profile(new)
         st.session_state["pending_profile"] = pid
         st.session_state["goto"] = "Matches"
         st.rerun()
@@ -179,21 +173,11 @@ def page_profile(pid: str) -> None:
                 st.rerun()
 
 
-def read_upload(up) -> str:
-    data = up.getvalue()
-    if up.name.lower().endswith(".pdf"):
-        try:
-            from pypdf import PdfReader
-            return "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(data)).pages).strip()
-        except Exception as e:
-            st.warning(f"Could not read {up.name}: {e}")
-            return ""
-    return data.decode("utf-8", errors="replace").strip()
-
-
 # ----------------------------------------------------------------------------- matches page
 def page_matches(pid: str) -> None:
     st.header("Your matches")
+    for w in st.session_state.pop("profile_warnings", []):
+        st.warning(w)
     p = db.load_profile(pid) if pid else None
     if not p:
         st.info("Create and save a profile first.")
@@ -227,13 +211,10 @@ def page_matches(pid: str) -> None:
 
     if not run.results:                                           # R13: explicit no-match notification
         st.warning("**No scholarships match your profile right now.** Nothing was hidden silently — the reasons are below.")
-        reasons = dict(s["sql_excluded"])
-        for e in run.exclusions:
-            reasons[e.stage.replace("_", " ")] = reasons.get(e.stage.replace("_", " "), 0) + 1
-        st.dataframe(pd.DataFrame(sorted(reasons.items(), key=lambda kv: -kv[1]), columns=["Why scholarships were excluded", "Count"]), hide_index=True, width="stretch")
+        st.dataframe(pd.DataFrame(list(exclusion_counts(run).items()), columns=["Why scholarships were excluded", "Count"]), hide_index=True, width="stretch")
         st.markdown("**Things to try:** add colleges you're applying to · fill in GPA, county and major · "
                     "turn off *no-essay only* · lower the minimum award · re-run the scrapers to refresh the catalog.")
-        show_exclusions(run)
+        show_exclusions(p, run)
         return
 
     c1, c2, c3 = st.columns([2, 1, 1])
@@ -242,7 +223,7 @@ def page_matches(pid: str) -> None:
     hide_unverified = c3.checkbox("Hide items needing verification", False)
     results = rubric.sort_results(run.results, order)
     if hide_unverified:
-        results = [r for r in results if not any(f.startswith(("Verify", "Check")) for f in r.flags)]
+        results = [r for r in results if not needs_verification(r)]
     results = results[: int(top_n)]
 
     st.dataframe(pd.DataFrame([{
@@ -258,8 +239,8 @@ def page_matches(pid: str) -> None:
 
     saved = {x["key"] for x in db.list_saved(pid)}
     for i, r in enumerate(results, 1):
-        result_card(pid, r, i, r.scholarship_key in saved, p.show_essay_titles if p else str)
-    show_exclusions(run)
+        result_card(pid, p, r, i, r.scholarship_key in saved)
+    show_exclusions(p, run)
 
 
 def config_today() -> str:
@@ -267,8 +248,9 @@ def config_today() -> str:
     return today_iso()
 
 
-def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool, show=str) -> None:
-    """`show` puts the student's essay titles back in place of the "Essay N" labels the agents saw."""
+def result_card(pid: str, p: StudentProfile, r: MatchResult, rank: int, is_saved: bool) -> None:
+    """`r` is the stored result; the card shows `for_display(r)` (the student's essay titles, not "Essay N")."""
+    stored, r = r, for_display(p, r)
     with st.container(border=True):
         head, act = st.columns([5, 1])
         title = f"{rank}. [{r.name}]({r.url})" if r.url else f"{rank}. {r.name}"
@@ -280,7 +262,7 @@ def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool, show=str) -
                 db.unsave_scholarship(pid, r.scholarship_key)
                 st.rerun()
         elif act.button("☆ Save", key=f"save-{r.scholarship_key}"):
-            db.save_scholarship(pid, r.scholarship_key, r.model_dump())
+            db.save_scholarship(pid, r.scholarship_key, stored.model_dump())     # stored with the agents' labels
             st.rerun()
         if act.button("💬 Ask", key=f"ask-{r.scholarship_key}"):
             st.session_state["chat_key"] = r.scholarship_key
@@ -294,9 +276,9 @@ def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool, show=str) -
         m[4].metric("Expected value", money(r.expected_value))
         m[5].metric("Deadline", r.deadline or "Not listed")
         if r.judgement and r.judgement.summary:
-            st.write(show(r.judgement.summary))
+            st.write(r.judgement.summary)
         for f in r.flags:
-            st.markdown(f"- ⚠️ {show(f)}")
+            st.markdown(f"- ⚠️ {f}")
         with st.expander("Why this score — rubric, evidence and eligibility checks"):
             st.table(pd.DataFrame([{"Dimension": l.dimension, "Rating": l.rating, "Points": f"{l.points:g} / {l.max_points:g}",
                                     "Why": l.why} for l in r.rubric]).set_index("Dimension"))
@@ -313,26 +295,24 @@ def result_card(pid: str, r: MatchResult, rank: int, is_saved: bool, show=str) -
                                        for e in j.fit_evidence]).set_index("Looking for"))
             if j and (j.strengths or j.gaps):
                 a, b = st.columns(2)
-                a.markdown("**Strengths**\n" + "\n".join(f"- {show(x)}" for x in j.strengths))
-                b.markdown("**Gaps**\n" + "\n".join(f"- {show(x)}" for x in j.gaps))
+                a.markdown("**Strengths**\n" + "\n".join(f"- {x}" for x in j.strengths))
+                b.markdown("**Gaps**\n" + "\n".join(f"- {x}" for x in j.gaps))
             if j and j.essay_reuse in ("full", "partial"):
-                title = show(j.reusable_essay_title)
-                title = title if title != j.reusable_essay_title else f"“{title}”"   # runs saved before labels
                 how = {"full": "fully", "partial": "partly"}[j.essay_reuse]
-                st.info(f"Essay tip: your essay {title} looks {how} reusable here.")
+                st.info(f"Essay tip: your essay {j.reusable_essay_title} looks {how} reusable here.")
             req = r.requirements.model_dump(exclude_none=True)
             if req:
                 st.caption("Application needs: " + ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in req.items() if v not in ([], False)))
 
 
-def show_exclusions(run) -> None:
+def show_exclusions(p: StudentProfile, run) -> None:
     with st.expander(f"Why not the others? ({sum(run.stats['sql_excluded'].values()) + len(run.exclusions)} excluded — full audit trail)"):
         st.markdown("**Removed by database rules**")
         st.dataframe(pd.DataFrame(sorted(run.stats["sql_excluded"].items(), key=lambda kv: -kv[1]), columns=["Reason", "Count"]), hide_index=True, width="stretch")
         if run.exclusions:
             st.markdown("**Removed individually**")
             st.dataframe(pd.DataFrame([{"Scholarship": e.name, "Stage": e.stage.replace("_", " "), "Reason": e.reason}
-                                       for e in run.exclusions]), hide_index=True, width="stretch")
+                                       for e in exclusions_for_display(p, run)]), hide_index=True, width="stretch")
 
 
 # ----------------------------------------------------------------------------- saved page

@@ -19,6 +19,10 @@ Streamlit app ── profile ──► Supervisor ──────────
      └── ranked list, rubric, exclusions, saved, chat (ChatAgent, grounded on the stored run)
 ```
 
+The HTTP API (`scholarmatch/api`, FastAPI) sits where the Streamlit app does and calls the same functions, so a
+custom front end gets identical results. It runs the Supervisor as a background job and reports its progress
+callback as server-sent events.
+
 | Component | Kind | Job | Output contract |
 |---|---|---|---|
 | Supervisor | code | Owns control flow; gates every agent; retries with feedback; fails safe; writes the audit log | `MatchRun` |

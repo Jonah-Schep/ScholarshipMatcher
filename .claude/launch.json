@@ -12,6 +12,12 @@
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.port", "8517", "--server.headless", "true"],
       "port": 8517
+    },
+    {
+      "name": "scholarmatch-api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "scholarmatch.api"],
+      "port": 8000
     }
   ]
 }

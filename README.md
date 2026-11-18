@@ -23,6 +23,24 @@ streamlit run app.py
 `load_sample.py` loads a small real snapshot (77 rows) with no network access so you can try the app
 immediately. With no LLM key the app runs in **rule-based mode**; add a key to turn the agents on.
 
+## HTTP API (for a custom front end)
+
+The same operations as the Streamlit app are available as JSON endpoints (FastAPI), for a React / TypeScript or
+other front end:
+
+```bash
+python -m scholarmatch.api
+```
+
+It serves `http://127.0.0.1:8000`; interactive docs are at `/docs` and the OpenAPI schema at `/openapi.json`
+(generate TypeScript types from it, e.g. with `openapi-typescript`). Match runs can take minutes with the agents on,
+so `POST /api/profiles/{id}/runs` starts a background job: follow it with `GET /api/jobs/{job_id}` or the
+server-sent events at `GET /api/jobs/{job_id}/events`, then read `GET /api/profiles/{id}/runs/latest`.
+
+The API returns the student's own profile (name, location) and has no login, so it listens on 127.0.0.1 only. Keep it
+that way unless you add authentication. `SM_API_HOST`, `SM_API_PORT` and `SM_API_CORS_ORIGINS` (default: the Vite dev
+server on port 5173) change the defaults.
+
 ## Configuration (`.env`, copy from `.env.example`)
 
 | Setting | Purpose |
@@ -87,6 +105,9 @@ scholarmatch/
   ingest/                  scam screen, rule-based criteria extraction
   matching/                hard_filter (SQL + rule checks), rubric (all scoring math)
   agents/                  workers (prompts + calls), supervisor (orchestration), chat
+  api/                     FastAPI app (routes, request/response schemas, background run jobs)
+  profile_io.py            essay upload reading + list parsing (shared by Streamlit and the API)
+  run_summary.py           run labels and display helpers (shared by Streamlit and the API)
 scripts/load_sample.py     offline sample catalog
 manual_sources/            hand-entered CSVs
 tests/                     pytest suite + fixtures

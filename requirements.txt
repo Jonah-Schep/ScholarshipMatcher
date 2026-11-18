@@ -1,4 +1,7 @@
 streamlit>=1.40
+fastapi>=0.115       # HTTP API for a custom front end (scholarmatch/api)
+uvicorn>=0.30
+python-multipart>=0.0.9   # essay uploads in the API
 pydantic>=2.6
 httpx>=0.27
 beautifulsoup4>=4.12

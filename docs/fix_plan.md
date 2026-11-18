@@ -955,3 +955,28 @@ award the notes mark as eligible is excluded.
   untested. (5) The supplement values (HOPE / LIFE / Palmetto / Need-based) still wait on the user; Palmetto Fellows
   passes for a 64-year-old freshman until then. (6) No live NC rows on the Windows catalog.
 
+
+## After the plan — design review and first live runs (2026-11-17/18)
+Moved here from CLAUDE.md's "Current state" so that file keeps only what is true now.
+- **Design review ("10 principles" paper, 2026-11-17).** Verifier prompt (`p3`) asks it to disprove each claim, with no
+  hint that another agent wrote them. A rejection carries a `counter_quote`; one that cites text in neither the
+  listing nor the profile is ignored and logged (`verifier` / `unsubstantiated`). When the Scorer's rounds run out,
+  evidence the Verifier disputed is dropped (it used to stay if its quote was grounded), and the "Low confidence" flag
+  names up to two disputed criteria with the checker's reason. Scorer evidence and Filter drop quotes need
+  ≥ `MIN_EVIDENCE_QUOTE_CHARS` (20) characters; each evidence criterion must share a content word with its quote
+  (`supervisor.shares_word`); a drop quote must contain requirement wording (`supervisor._REQUIREMENT_WORDING`). Audit
+  events added: `scorer` / `downgraded`, `verifier` / `unsubstantiated`; `scorer` / `rejected` now records the fit.
+- **First live pipeline run (VT ARC, 2026-11-18, profile `demo`).** The Verifier had rejected claims about rules that
+  code had already checked, and "rising junior" claims for current sophomores; `p4` tells it both. The Scorer now lists
+  selection criteria only. `checks-2` accepts "student who / with / majoring …" as requirement wording. The flag says
+  "A checker thinks you may meet …" when the objection favours the student. 4 fallbacks in the run (2 invalid JSON,
+  timeouts); `openai_compat` errors now start with the role.
+- **Essay privacy (live test 2026-11-18).** Essay file names such as "Priya_robotics_essay.txt" carried the student's
+  name to every agent. Agents now see "Essay 1", "Essay 2" (`models.essay_label`); the app restores real titles for
+  display (`StudentProfile.show_essay_titles`). `workers.essay_themes` no longer sends the title and removes the full
+  name plus county, city and high school as whole phrases (`textutil.redact_pii(..., places=...)`); a name part the
+  essay also uses as a lowercase word ("One", "Grace") is no longer replaced everywhere.
+- **Catalog snapshot (2026-11-14).** Mac: 2,467 rows (ECU 1,235, USC 1,000 with about 1,000 past deadlines, VT 187,
+  Google Sites 36, SC CHE 9). Windows: 214 (VT 187 with every open detail page, Queen City 18 all ended, SC CHE 9).
+- **Checked in the running app (2026-11-14):** Profile form incl. Age and Affiliations, run header labels,
+  empty-result page, "$0.00" amount flag. Not checked: the Data & audit page.

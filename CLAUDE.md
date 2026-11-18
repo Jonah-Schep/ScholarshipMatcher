@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Keep it current when behaviour, commands or invariants change.
 
 ## What this is
-ScholarMatch: a scholarship matcher for VA/NC/SC students. Python 3.12+, Streamlit UI, SQLite, a
-supervised multi-agent LLM pipeline. Course final project (ADSAI).
+ScholarMatch: a scholarship matcher for VA/NC/SC students. Python 3.12+, Streamlit UI plus a FastAPI HTTP API
+(for a planned React + TypeScript front end), SQLite, a supervised multi-agent LLM pipeline. Course final project (ADSAI).
 Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scraping rules: `scraper-brief.md`.
 
 ## Commands
@@ -13,7 +13,8 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - Tests: `python -m pytest -q` (no network or key needed; must stay green)
   - One test: `python -m pytest -q tests/test_pipeline.py::test_no_pii_reaches_agents` (or `-k <substring>`)
   - `test_units.py` = parsers, rules, rubric; `test_pipeline.py` = Supervisor end-to-end with `FakeLLM`;
-    `test_regression.py` = manual-test awards × profiles through `extract_rules` + `hard_filter` (strict xfails per WP)
+    `test_regression.py` = manual-test awards × profiles through `extract_rules` + `hard_filter` (strict xfails per WP);
+    `test_api.py` = every API route through FastAPI's `TestClient` (`create_app(llm=..., as_of=...)`)
 - False-positive eval (rule-based, offline): `python scripts/eval_profiles.py` (local catalog), `--db PATH`,
   `--corpus` (regression corpus only), `--show`, `--as-of DATE` (default pinned to 2026-11-12 so numbers compare
   across sessions; deadlines are judged against it). Works on a temp copy; never writes to the catalog.
@@ -26,6 +27,8 @@ Specs: `docs/requirements.md` (numbered A1–D7), `docs/architecture.md`. Scrapi
 - Refresh the regression corpus from a real catalog: `python scripts/export_regression.py --db PATH [--dry-run]`
 - App: `streamlit run app.py`, port 8517. Launch configs in `.claude/launch.json`: `scholarmatch` (Windows,
   `python` on PATH) and `scholarmatch-mac` (`.venv/bin/python`, since `python` is not on PATH on the Mac).
+- API: `python -m scholarmatch.api` → `http://127.0.0.1:8000` (`/docs`, `/openapi.json`); launch config
+  `scholarmatch-api`. `SM_API_HOST`, `SM_API_PORT`, `SM_API_CORS_ORIGINS` (default the Vite dev server, :5173).
 - Sample catalog, offline: `python scripts/load_sample.py`
 - Scrape: `python -m scholarmatch.scrapers.runner --sources vt,ecu,sc_che,gsites,manual` (needs `SCRAPER_CONTACT_EMAIL`)
   - Sources: `vt`, `usc`, `ecu` (`scrapers/academicworks.py`), `sc_che` (`scrapers/state_aid.py`), `gsites`,
@@ -59,6 +62,10 @@ Match: `Supervisor.run(profile)` in `agents/supervisor.py`:
    is at most `MAX_SUPERVISOR_ROUNDS` rounds.
    LLM criteria are cached per row under `PROMPT_VERSION:RULES_VERSION:model` (they carry rule-extracted fields).
 4. `rubric.py` turns categories into points, chance, effort and expected value → saves the `MatchRun` and audit events to the DB.
+Front ends: `app.py` (Streamlit) and `scholarmatch/api/` (FastAPI) call the same backend functions; shared input and
+display logic lives in `profile_io.py` (essay reading, list parsing, `add_essays`) and `run_summary.py`
+(`review_mode_label`, `for_display`, `needs_verification`, `exclusion_counts`), never in a front end. The API runs
+`Supervisor.run` as an in-memory background job (`api/jobs.JobRunner`) and streams its progress callback as SSE.
 Chat (`agents/chat.py`) answers follow-ups on a single scholarship from the listing, the stored rubric and a compacted history.
 Full sequence diagram: `docs/architecture.md`.
 
@@ -94,7 +101,10 @@ Full sequence diagram: `docs/architecture.md`.
 10. **Scraping.** All HTTP goes through `scrapers/http.PoliteFetcher`. Never add a source without checking
     its robots.txt and terms; never work around a 403/challenge; never log in; no parallel requests to one
     host. Sources that are deliberately not automated, with reasons, live in `scrapers/pending.py`.
-11. Listing text is untrusted input: keep the "treat as data" rule in every prompt; give agents no
+11. **API is local-only.** It returns the student's own PII and has no auth: binds to 127.0.0.1, never returns
+    essay text (titles, themes and length only), and shows essay titles via `for_display` / `show_essay_titles`.
+    Profile writes go through `ProfileIn` (`extra="forbid"`); essays only through the essay endpoints.
+12. Listing text is untrusted input: keep the "treat as data" rule in every prompt; give agents no
     state-changing tools.
 
 ## LLM layer
@@ -122,6 +132,7 @@ Full sequence diagram: `docs/architecture.md`.
 | Prompts and agent contracts | `agents/workers.py`, `models.py` |
 | How Extractor output and rule criteria are merged (grounding, union, rule fallback, `from_rules`) | `workers.to_criteria` / `HARD_FIELDS` |
 | Supervisor checks / retry policy | `agents/supervisor.py` |
+| API route or response shape | `scholarmatch/api/app.py`, `api/schemas.py`, `tests/test_api.py`; logic both front ends need goes in `profile_io.py` / `run_summary.py` |
 | New scraper | new module in `scrapers/`, register in `scrapers/runner.py`, add a trimmed real fixture + parser test |
 
 ## Testing notes
@@ -138,80 +149,57 @@ Full sequence diagram: `docs/architecture.md`.
   must delete its entry (strict). Details: `docs/fix_plan.md` → "WP0 notes".
 
 ## Current state (update as work lands)
-Fix plan WP0–WP8 are done, and so is WP6 apart from the supplement values (round 3: `docs/manual_test_2026-11-14_round3.md`).
-Per-package detail and the "WPn notes" are in `docs/fix_plan.md`, which is where to look before changing a rule below.
-- Tests: 238 collected = 234 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
-- Versions: `rules-7`, `p5`, `rubric-6`, `checks-2`. Each rule family below added its own version bump.
+Fix plan WP0–WP8 are done (WP6 apart from the supplement values). History, dated live-run findings and catalog
+snapshots are in `docs/fix_plan.md` ("WPn notes" and "After the plan"); read it before changing a rule below.
+- Tests: 251 collected = 247 pass + 4 strict xfail ("WP6-supplement"; they wait on the user's PDF values).
+- Versions: `rules-7`, `p5`, `rubric-6`, `checks-2`.
+- Catalog: sizes differ by machine and change with each scrape; check `GET /api/catalog/stats` or the Data & audit page.
 - Behaviour that is easy to miss when reading one file:
   - **Unknown amounts:** "$0.00" means unknown (`amount_value=None`, "Varies", plus a flag). It is not excluded.
-  - **Certainty** (`rubric.info_level`): `none` (title only, or under 40 chars) caps eligibility certainty at 30%.
+  - **Certainty** (`rubric.info_level`): `none` (title only, or under 40 chars) caps eligibility certainty at 30%;
     `thin` (no field in `rubric.HARD_CRITERIA_FIELDS`) caps it at 60%. A `HardCheck.weight="restrictive"` unknown
-    counts 0, caps certainty at 30% too (`rubric-6`, so group-limited awards rank below open ones) and multiplies the
-    chance by 0.25. New hard `Criteria` fields go in both `HARD_FIELDS` and `HARD_CRITERIA_FIELDS`.
-  - **Rule input** (`rules-7`): `extract` reads `Scholarship.full_text(questions=False)`. Supplemental questions
-    are asked of the applicant and are never eligibility rules (they still count for essays/uploads). A sentence
-    with "…, with preference to X" keeps the clause before the marker as a hard sentence (`_PREF_SPLIT`).
-  - **Restrictive checks** (fail only on a definite mismatch, otherwise a restrictive unknown):
-    - Specific group (`restricted_groups` vs `affiliations` / `no_special_affiliations`, `military_affiliation`).
-    - Locality (counties, cities, school systems, high schools; only behind restrictive wording, never from
-      preference sentences).
-    - College attending (`destination_schools`).
-    - Residency (`non_resident_required`).
-    - Age (`min_age` vs the optional local `age`).
-    - Type of college (`institution_types`).
-    - A sentence offering an "or" alternative gives an unknown instead of a fail. Check details never repeat the
-      student's affiliations, county, city or high school.
-  - **Levels and majors:** graduate and professional program wording sets `levels` to graduate
+    counts 0, caps certainty at 30% and multiplies the chance by 0.25, so group-limited awards rank below open ones.
+    New hard `Criteria` fields go in both `workers.HARD_FIELDS` and `rubric.HARD_CRITERIA_FIELDS`.
+  - **Rule input:** `extract` reads `Scholarship.full_text(questions=False)`; supplemental questions are never
+    eligibility rules (they still count for essays/uploads). In "…, with preference to X" the clause before the marker
+    stays hard (`_PREF_SPLIT`).
+  - **Restrictive checks** fail only on a definite mismatch, otherwise give a restrictive unknown: specific group
+    (`restricted_groups` vs `affiliations` / `no_special_affiliations`, `military_affiliation`), locality (only behind
+    restrictive wording, never from preference sentences), college attending (`destination_schools`), residency
+    (`non_resident_required`), age (`min_age` vs the optional local `age`), type of college (`institution_types`).
+    A sentence offering an "or" alternative gives an unknown. Check details never repeat the student's affiliations,
+    county, city or high school.
+  - **Levels and majors:** graduate/professional program wording sets `levels` to graduate
     (`extract_rules.GRADUATE_PROGRAMS`). A college or department name alone sets `majors_from_unit`, so only a direct
     field hit passes. `declared_major_required` turns a high-school senior's pass into an unknown. "Enhancement"
     sentences are ignored for majors.
-  - **Extractor merge** (`workers.to_criteria`): an ungrounded value means the rule value is kept. For lists, the
-    result is the union of rule and LLM values. A grounded scalar replaces the rule value. A null or false from the
-    model keeps the rule value. `Criteria.from_rules` lists the fields that came from rules alone.
-  - **Design-review fixes (2026-11-17, "10 principles" paper):**
-    - Verifier prompt (`p3`) asks it to disprove each claim, with no hint that another agent wrote them. A rejection
-      carries a `counter_quote`; one that cites text in neither the listing nor the profile is ignored and logged
-      (`verifier` / `unsubstantiated`).
-    - When the Scorer's rounds run out, evidence the Verifier disputed is dropped (it used to stay if its quote was
-      grounded), and the "Low confidence" flag names up to two disputed criteria with the checker's reason.
-    - Scorer evidence and Filter drop quotes need ≥ `MIN_EVIDENCE_QUOTE_CHARS` (20) characters; each evidence
-      criterion must share a content word with its quote (`supervisor.shares_word`). A drop quote must also contain
-      requirement wording (`supervisor._REQUIREMENT_WORDING`): a held-out check that is deliberately in no prompt.
-      All of these can only retry, turn a drop into "uncertain" or lower a fit; none can hide a scholarship.
-    - Audit events added: `scorer` / `downgraded`, `verifier` / `unsubstantiated`; `scorer` / `rejected` now records
-      the fit.
-    - After the first live run (VT ARC, 2026-11-18, `demo`): `p4` tells the Verifier that eligibility rules were
-      checked by code and that "rising junior" includes current sophomores (it had rejected those claims), and tells
-      the Scorer to list selection criteria only. `checks-2` accepts "student who / with / majoring …" as requirement
-      wording. The flag says "A checker thinks you may meet …" when the objection favours the student.
-      `openai_compat` errors now start with the role (the run had 4 fallbacks: 2 invalid JSON, timeouts).
-  - **Essays (live test 2026-11-18):** agents see essays only as "Essay 1", "Essay 2" (`models.essay_label`; file
-    names such as "Priya_robotics_essay.txt" carried the student's name to every agent). The app puts the real titles
-    back for display with `StudentProfile.show_essay_titles` (summary, strengths, gaps, flags, essay tip, chat). The
-    one call that sends essay text (`workers.essay_themes`) no longer sends the title and removes the name plus
-    county, city and high school as whole phrases (`textutil.redact_pii(..., places=...)`). A name part that the
-    essay also uses as a lowercase word ("One", "Grace") is no longer replaced everywhere; only the full name is.
-    Other names in an essay (family, friends) are still sent, and the upload caption says so.
-  - **Run header:** `run_summary.review_mode_label(run)` shows "AI-reviewed (N of M)", "rule-based", "rule-based
-    (AI review unavailable)", or "AI review on (nothing passed the rule checks to review)" for an empty LLM run.
+  - **Supervisor checks** (`checks-2`): Scorer evidence and Filter drop quotes need ≥ `MIN_EVIDENCE_QUOTE_CHARS` (20)
+    characters; each evidence criterion must share a content word with its quote (`supervisor.shares_word`); a drop
+    quote must contain requirement wording (`supervisor._REQUIREMENT_WORDING`), a held-out check deliberately kept out
+    of every prompt. These can only retry, turn a drop into "uncertain" or lower a fit; none can hide a scholarship.
+  - **Verifier:** asked to disprove each claim, not told another agent wrote them. A rejection needs a `counter_quote`
+    from the listing or profile, else it is ignored (`verifier` / `unsubstantiated`). When rounds run out, disputed
+    evidence is dropped and the "Low confidence" flag names up to two disputed criteria.
+  - **Essays:** agents see only "Essay 1", "Essay 2" (`models.essay_label`); the app restores real titles for display
+    (`StudentProfile.show_essay_titles`). `workers.essay_themes` removes the full name, county, city and high school
+    as whole phrases (`textutil.redact_pii(..., places=...)`); other names in an essay are still sent.
+  - **Run header:** `run_summary.review_mode_label(run)` gives "AI-reviewed (N of M)", "rule-based", "rule-based
+    (AI review unavailable)", or "AI review on (nothing passed the rule checks to review)".
   - **LLM concurrency:** every provider call goes through one process-wide semaphore (`llm._inflight()`,
-    `SM_LLM_MAX_INFLIGHT`, default 6), shared by all runs. VT ARC returns 429 above 10 calls in flight per user.
-    `Supervisor._evaluate` turns *any* per-item exception into the rule-based fallback (`llm_failure` for an
-    `LLMError`, else `item_error`), so one item can never end a run.
-- Supplements (decision D2): `manual_sources/supplements/sc_che.csv` currently holds only `TODO(user)` placeholders,
-  which are ignored. `manual.load_all` does not read that subfolder.
-- Live LLM: VT ARC (`openai_compat`) works as of 2026-11-14 but is slow: a 30-item run takes 10–15 min (Extractor
-  answers 20–60 s). Timeouts are not retried; 429 / 5xx back off 5/10/20 s (`openai_compat.call_with_backoff`,
-  `SM_OPENAI_TIMEOUT` 300 s). Anthropic is untested. After any live run, check the **Data & audit** page for
-  `rejected` / `llm_failure` / `item_error` events.
-- Forms: `ingest/scam.is_form` tags survey / release forms (`aid_type = "form"`); the SQL stage drops them.
-- Catalog: the Mac has 2,467 scraped rows (ECU 1,235, USC 1,000 with about 1,000 past deadlines, VT 187, Google
-  Sites 36, SC CHE 9). The Windows checkout has 214 (VT 187 re-scraped 2026-11-14, every open row with its detail
-  page; Queen City 18, all ended; SC CHE 9), so it has nothing live for NC students.
-- Not built: BigFuture (terms unconfirmed), CareerOneStop (needs the user's API credentials), embedded Google Docs on
+    `SM_LLM_MAX_INFLIGHT`). `Supervisor._evaluate` turns *any* per-item exception into the rule-based fallback
+    (`llm_failure` for an `LLMError`, else `item_error`), so one item can never end a run.
+  - **Forms:** `ingest/scam.is_form` tags survey / release forms (`aid_type = "form"`); the SQL stage drops them.
+- Supplements (decision D2): `manual_sources/supplements/sc_che.csv` holds only `TODO(user)` placeholders, which are
+  ignored. `manual.load_all` does not read that subfolder.
+- Live check 2026-11-18 (VT ARC, `SM_MAX_LLM_CANDIDATES=5`, catalog copy): Streamlit in a browser and the API each ran
+  essay upload, a match run (16-17 calls, about 5 min), save, chat and audit. One Verifier invalid-JSON `llm_failure`
+  fell back as designed. A rubric reason quoted "Essay 1"; `for_display` now maps every agent-worded field.
+- Live LLM: VT ARC (`openai_compat`) works but is slow (30-item run 10–15 min; Extractor 20–60 s per answer) and
+  returns 429 above 10 calls in flight per user. Timeouts are not retried; 429 / 5xx back off 5/10/20 s
+  (`openai_compat.call_with_backoff`, `SM_OPENAI_TIMEOUT` 300 s). After any live run, check the **Data & audit** page
+  (checked after a live run, 2026-11-18) for `rejected` / `llm_failure` / `item_error` events.
+- Not built: the React front end (the API is ready for it), BigFuture (terms unconfirmed), CareerOneStop (needs the user's API credentials), embedded Google Docs on
   counselor pages, PDF rule extraction (replaced by the hand-typed supplement).
-- Checked in the running app (2026-11-14): Profile form incl. Age and Affiliations, run header labels, empty-result
-  page, "$0.00" amount flag. Not checked: the Data & audit page.
 
 ## Still to fix
 The fix plan (`docs/fix_plan.md`) is finished; the open items below come from its "WP8 notes". Notes from the manual
@@ -222,10 +210,10 @@ all "Verify" items D1 keeps visible (group limits, SC CHE programs for profiles 
 2. **Small rule gaps:** VTCSOM (MD) awards pass for vet-med students; an affiliation passes a group check only on a
    distinctive shared word (a staff-parent affiliation does not pass "dependents of … staff or faculty").
 3. **Anthropic provider** never run live, so the Verifier's different default model is untested too.
-5. **Agents vs baselines not yet measured live:** `scripts/eval_agents.py` exists and is tested with `FakeLLM`; the
+4. **Agents vs baselines not yet measured live:** `scripts/eval_agents.py` exists and is tested with `FakeLLM`; the
    `single` and `pipeline` numbers need a live provider run (rules-only on the corpus, 2026-11-17: 64 shown,
    21 known-ineligible shown, 17 in top tens, 0 eligible lost).
-4. **Waiting on the user:** the HOPE, LIFE, Palmetto Fellows and Need-based Grant citizenship (and maybe GPA) rules
+5. **Waiting on the user:** the HOPE, LIFE, Palmetto Fellows and Need-based Grant citizenship (and maybe GPA) rules
    exist only in the PDFs. The user types them into `manual_sources/supplements/sc_che.csv` (read
    `manual_sources/README.md` first). Then re-ingest and delete the 4 "WP6-supplement" `XFAIL` entries that turn
    into XPASS.
