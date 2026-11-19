@@ -34,7 +34,7 @@ export function SavedPage() {
   return (
     <section>
       <h2>Saved scholarships</h2>
-      {!saved.loading && items.length === 0 && <p>Nothing saved yet. Press ☆ Save on a match to keep it here.</p>}
+      {!saved.loading && items.length === 0 && <p>Nothing saved yet. Press Save on a match to keep it here.</p>}
       {items.map((it) => {
         const snap = it.snapshot as { name?: string; url?: string; amount_display?: string; deadline?: string | null };
         return (
@@ -43,7 +43,7 @@ export function SavedPage() {
               <h3>{snap.url ? <a href={snap.url} target="_blank" rel="noreferrer">{snap.name ?? it.key}</a> : (snap.name ?? it.key)}</h3>
               <p className="muted small">
                 {amountLabel(snap.amount_display)} · deadline {snap.deadline || "not listed"}
-                {it.ended && " · ⚠️ now closed"}
+                {it.ended && " · now closed"}
               </p>
               <input
                 key={`${it.key}:${it.note}`}
@@ -60,7 +60,7 @@ export function SavedPage() {
                 ))}
               </select>
               <Link className="button" to={`/p/${pid}/advisor/${encodeURIComponent(it.key)}`}>
-                💬 Ask
+                Ask the advisor
               </Link>
               <button onClick={() => remove(it.key)}>Remove</button>
             </div>

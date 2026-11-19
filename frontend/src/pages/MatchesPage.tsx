@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ApiError, type Job, type RunView, unwrap } from "../api/client";
+import { api, ApiError, type Job, type MatchResult, type RunView, unwrap } from "../api/client";
 import { ResultCard } from "../components/ResultCard";
 import { useApp } from "../Layout";
-import { errorText, useLoad } from "../lib";
+import { daysUntil, errorText, shortDate, useLoad } from "../lib";
 
 const jobKey = (pid: string) => `scholarmatch.job.${pid}`;
 
@@ -121,36 +121,53 @@ function useRunJob(pid: string, onDone: () => void) {
   return { job, running, error, start };
 }
 
+type Filter = "all" | "strong" | "soon" | "quick";
+const ALL_RESULTS = 500; // the cards are filtered here, so load the whole run
+
+const FILTERS: [Filter, string][] = [
+  ["all", "All"],
+  ["strong", "Strong fit"],
+  ["soon", "Due in 30 days"],
+  ["quick", "2 hours or less"],
+];
+
 export function MatchesPage() {
   const { pid = "" } = useParams();
   const { meta, profiles } = useApp();
   const [sort, setSort] = useState(meta.sorts[0] ?? "Best overall match");
-  const [limit, setLimit] = useState(meta.max_results);
   const [hideUnverified, setHideUnverified] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
   const [force, setForce] = useState(false);
+  const known = profiles.includes(pid);
 
   const run = useLoad(async (): Promise<RunView | null> => {
     try {
       return await unwrap(
         api.GET("/api/profiles/{pid}/runs/latest", {
-          params: { path: { pid }, query: { sort, limit, hide_unverified: hideUnverified } },
+          params: { path: { pid }, query: { sort, limit: ALL_RESULTS, hide_unverified: hideUnverified } },
         }),
       );
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
-  }, [pid, sort, limit, hideUnverified]);
+  }, [pid, sort, hideUnverified]);
+  const profile = useLoad(
+    async () => (known ? await unwrap(api.GET("/api/profiles/{pid}", { params: { path: { pid } } })) : null),
+    [pid, known],
+  );
   const saved = useLoad(() => unwrap(api.GET("/api/profiles/{pid}/saved", { params: { path: { pid } } })), [pid]);
   const savedKeys = new Set((saved.data ?? []).map((s) => s.key));
   const reloadRun = run.reload;
   const { job, running, error, start } = useRunJob(pid, reloadRun);
 
-  if (!profiles.includes(pid))
+  if (!known)
     return (
-      <section>
-        <h2>Your matches</h2>
-        <p>
+      <section className="hero">
+        <div className="hero-title">
+          <h1>Your matches</h1>
+        </div>
+        <p className="muted">
           Create and save a <Link to={`/p/${pid}/profile`}>profile</Link> first.
         </p>
       </section>
@@ -168,142 +185,200 @@ export function MatchesPage() {
   }
 
   const v = run.data;
-  const stats = (v?.stats ?? {}) as Record<string, number>;
+  const results = v?.results ?? [];
+  const asOf = v?.as_of ?? new Date().toISOString().slice(0, 10);
+  const days = (r: MatchResult) => daysUntil(r.deadline, asOf);
+  const tests: Record<Filter, (r: MatchResult) => boolean> = {
+    all: () => true,
+    strong: (r) => r.judgement?.fit === "strong",
+    soon: (r) => (days(r) ?? Infinity) <= 30,
+    quick: (r) => r.effort_hours <= 2,
+  };
+  const count = (f: Filter) => results.filter(tests[f]).length;
+  const shown = results.filter(tests[filter]);
+  const reuse = results.filter((r) => r.judgement?.essay_reuse === "full" || r.judgement?.essay_reuse === "partial").length;
+  const upcoming = results
+    .filter((r) => r.deadline)
+    .sort((a, b) => a.deadline!.localeCompare(b.deadline!))
+    .slice(0, 4);
+  const firstName = profile.data?.profile.display_name?.split(/\s+/)[0];
+  const excluded = v ? Object.values(v.exclusion_counts).reduce((a, b) => a + b, 0) : 0;
+
   return (
     <section>
-      <h2>Your matches</h2>
-      <div className="row">
-        <button className="primary" disabled={running} onClick={() => start(force)}>
-          🔎 Find my scholarships
-        </button>
-        <label className="check">
-          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-          Re-run from scratch (ignore the stored result for today)
-        </label>
-      </div>
-      {running && job && (
-        <div className="progress" role="status">
-          <div className="bar" style={{ width: `${Math.round(job.fraction * 100)}%` }} />
-          <span>{job.message}</span>
+      <div className="hero">
+        <div className="hero-top">
+          <div className="hero-title">
+            <p>{firstName ? `Hi ${firstName}` : "Your matches"}</p>
+            <h1>
+              {v
+                ? `${v.total_results} scholarship${v.total_results === 1 ? "" : "s"} you qualify for`
+                : "Find scholarships you can win"}
+            </h1>
+          </div>
+          {v && v.total_results > 0 && (
+            <div className="hero-stats">
+              <div className="hero-stat"><b>{count("strong")}</b><span>strong fits</span></div>
+              <div className="hero-stat"><b>{count("soon")}</b><span>due in 30 days</span></div>
+              <div className="hero-stat"><b>{reuse}</b><span>reuse an essay</span></div>
+            </div>
+          )}
         </div>
-      )}
+        <div className="hero-actions">
+          <button className="primary" disabled={running} onClick={() => start(force)}>
+            {v ? "Refresh matches" : "Find my scholarships"}
+          </button>
+          <label className="check small">
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+            Re-run from scratch
+          </label>
+          {v && (
+            <span className="hero-meta">
+              {v.review_mode} · {shortDate(v.as_of)}
+              {v.stale && <span className="stale"> · profile or catalog changed, refresh</span>}
+            </span>
+          )}
+        </div>
+        {running && job && (
+          <div className="progress" role="status">
+            <div className="bar" style={{ width: `${Math.round(job.fraction * 100)}%` }} />
+            <span>{job.message}</span>
+          </div>
+        )}
+      </div>
+
       {job?.state === "error" && <div className="notice error">The run failed: {job.error}</div>}
       {error && <div className="notice error">{error}</div>}
       {run.error && <div className="notice error">{run.error}</div>}
 
       {v === null && !running && (
-        <div className="notice info">
-          Press <strong>Find my scholarships</strong>. Hard rules run first; only real candidates are reviewed by the AI
-          agents.
-        </div>
+        <div className="notice info">Rules check every listing first; only real candidates go to the AI reviewers.</div>
       )}
 
       {v && (
-        <>
-          <p className="muted small">
-            Run {v.run_id} · evaluated as of {v.as_of} · {v.review_mode}
-            {v.stale && " · ⚠️ your profile or the catalog changed since this run — press Find to refresh"}
-          </p>
-          <dl className="metrics wide">
-            <div><dt>In catalog</dt><dd>{stats.catalog}</dd></div>
-            <div><dt>Pass hard rules</dt><dd>{stats.eligible}</dd></div>
-            <div><dt>Reviewed in depth</dt><dd>{stats.reviewed}</dd></div>
-            <div><dt>Matches for you</dt><dd>{stats.matched}</dd></div>
-          </dl>
-
-          {v.total_results === 0 ? (
-            <div className="notice warn">
-              <p>
-                <strong>No scholarships match your profile right now.</strong> Nothing was hidden silently — the reasons
-                are below.
-              </p>
-              <p>
-                Things to try: add colleges you're applying to · fill in GPA, county and major · turn off no-essay only ·
-                lower the minimum award.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="row controls">
-                <label className="field">
-                  <span>Order by</span>
-                  <select value={sort} onChange={(e) => setSort(e.target.value)}>
-                    {meta.sorts.map((s) => (
-                      <option key={s}>{s}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field narrow">
-                  <span>Show top</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={Math.max(1, v.total_results)}
-                    value={limit}
-                    onChange={(e) => setLimit(Math.max(1, Number(e.target.value) || 1))}
-                  />
-                </label>
-                <label className="check">
-                  <input type="checkbox" checked={hideUnverified} onChange={(e) => setHideUnverified(e.target.checked)} />
-                  Hide items needing verification
-                </label>
+        <div className="matches-layout">
+          <div className="matches-main">
+            {v.total_results === 0 ? (
+              <div className="notice warn">
+                <p>
+                  <strong>No matches right now.</strong> Nothing was hidden silently; the reasons are below.
+                </p>
+                <p>
+                  Try: add colleges you're applying to · fill in GPA, county and major · turn off no-essay only · lower
+                  the minimum award.
+                </p>
               </div>
-              <p className="muted small">
-                <strong>Est. chance</strong> is a rough estimate from who can apply, how many awards exist and your fit —
-                not a statistic. <strong>Expected value</strong> = chance × award.
-              </p>
-              {v.results.map((r, i) => (
-                <ResultCard
-                  key={r.scholarship_key}
-                  r={r}
-                  rank={i + 1}
-                  pid={pid}
-                  saved={savedKeys.has(r.scholarship_key)}
-                  onToggleSave={() => toggleSave(r.scholarship_key)}
-                />
-              ))}
-            </>
-          )}
-
-          <details>
-            <summary>
-              Why not the others? ({Object.values(v.exclusion_counts).reduce((a, b) => a + b, 0)} excluded — full audit
-              trail)
-            </summary>
-            <table>
-              <thead>
-                <tr><th>Reason</th><th>Count</th></tr>
-              </thead>
-              <tbody>
-                {Object.entries(v.exclusion_counts).map(([reason, n]) => (
-                  <tr key={reason}>
-                    <td>{reason}</td>
-                    <td className="num">{n}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {v.exclusions.length > 0 && (
+            ) : (
               <>
-                <h4>Removed individually</h4>
-                <table>
-                  <thead>
-                    <tr><th>Scholarship</th><th>Stage</th><th>Reason</th></tr>
-                  </thead>
-                  <tbody>
-                    {v.exclusions.map((e) => (
-                      <tr key={e.scholarship_key}>
-                        <td>{e.name}</td>
-                        <td>{e.stage.replaceAll("_", " ")}</td>
-                        <td>{e.reason}</td>
-                      </tr>
+                <div className="toolbar">
+                  {FILTERS.map(([f, label]) => (
+                    <button key={f} className="chip-btn" aria-pressed={filter === f} onClick={() => setFilter(f)}>
+                      {label} {count(f)}
+                    </button>
+                  ))}
+                  <button
+                    className="chip-btn"
+                    aria-pressed={hideUnverified}
+                    onClick={() => setHideUnverified(!hideUnverified)}
+                  >
+                    Hide “verify”
+                  </button>
+                  <label className="sort">
+                    Sort
+                    <select value={sort} onChange={(e) => setSort(e.target.value)}>
+                      {meta.sorts.map((s) => (
+                        <option key={s}>{s}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {shown.length === 0 ? (
+                  <p className="muted">No matches in this view.</p>
+                ) : (
+                  <div className="cards">
+                    {shown.map((r) => (
+                      <ResultCard
+                        key={r.scholarship_key}
+                        r={r}
+                        pid={pid}
+                        asOf={asOf}
+                        saved={savedKeys.has(r.scholarship_key)}
+                        onToggleSave={() => toggleSave(r.scholarship_key)}
+                      />
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                )}
               </>
             )}
-          </details>
-        </>
+
+            <details className="panel" style={{ marginTop: "1.5rem" }}>
+              <summary>Why not the others? ({excluded} excluded)</summary>
+              <table>
+                <tbody>
+                  {Object.entries(v.exclusion_counts).map(([reason, n]) => (
+                    <tr key={reason}>
+                      <td>{reason}</td>
+                      <td className="num">{n}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {v.exclusions.length > 0 && (
+                <>
+                  <h4>Removed individually</h4>
+                  <div className="scroll">
+                    <table>
+                      <thead>
+                        <tr><th>Scholarship</th><th>Stage</th><th>Reason</th></tr>
+                      </thead>
+                      <tbody>
+                        {v.exclusions.map((e) => (
+                          <tr key={e.scholarship_key}>
+                            <td>{e.name}</td>
+                            <td className="nowrap">{e.stage.replaceAll("_", " ")}</td>
+                            <td>{e.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </details>
+          </div>
+
+          <aside className="matches-side">
+            {upcoming.length > 0 && (
+              <section className="panel" aria-label="Due soon">
+                <h3 style={{ margin: 0 }}>Due soon</h3>
+                <ol className="plain due-list">
+                  {upcoming.map((r) => {
+                    const d = new Date(`${r.deadline!.slice(0, 10)}T00:00:00`);
+                    const n = days(r);
+                    return (
+                      <li key={r.scholarship_key}>
+                        <span className={`due-date ${n !== null && n <= 14 ? "urgent" : ""}`}>
+                          <small>{d.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}</small>
+                          <b>{d.getDate()}</b>
+                        </span>
+                        <span>{r.name}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            )}
+            <section className="panel stack" aria-label="Advisor">
+              <h3 style={{ margin: 0 }}>Ask the advisor</h3>
+              <p className="muted small" style={{ margin: 0 }}>
+                Questions about any match, answered from the listing.
+              </p>
+              <Link className="button primary" to={`/p/${pid}/advisor`}>
+                Open advisor
+              </Link>
+            </section>
+          </aside>
+        </div>
       )}
     </section>
   );

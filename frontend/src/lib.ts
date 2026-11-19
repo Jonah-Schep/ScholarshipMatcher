@@ -61,3 +61,24 @@ export const splitLines = (text: string) =>
     .filter(Boolean);
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const isoDay = (d: string) => new Date(`${d.slice(0, 10)}T00:00:00`);
+
+/** Whole days from `asOf` (the run's evaluation date) to `deadline`; null when there is no deadline. */
+export function daysUntil(deadline: string | null | undefined, asOf: string): number | null {
+  if (!deadline) return null;
+  return Math.round((isoDay(deadline).getTime() - isoDay(asOf).getTime()) / 86_400_000);
+}
+
+/** A short deadline such as "Jan 8" (no year: open deadlines fall within the coming year). */
+export function shortDate(d: string | null | undefined): string {
+  if (!d) return "—";
+  return isoDay(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const FIT = { strong: "Strong fit", moderate: "Good fit", weak: "Weak fit", none: "Low fit" } as const;
+
+/** The fit chip's label; items without an AI judgement were scored by the rules alone. */
+export function fitLabel(r: { judgement?: { fit: keyof typeof FIT } | null }): string {
+  return r.judgement ? FIT[r.judgement.fit] : "Rule-based";
+}

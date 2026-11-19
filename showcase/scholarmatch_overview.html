@@ -1,0 +1,544 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ScholarMatch Overview Loop</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: a fixed 1920x1080 stage scaled to fit any screen; scenes play on a 91-second loop with big on-screen text (no sound needed). */
+:root {
+  --ink: #1B2A41; --maroon: #861F41; --maroon-soft: #F6E9EE; --orange: #B34700; --orange-soft: #FFF1E6;
+  --paper: #FFFFFF; --mist: #EEF1F6; --line: #C9CED6; --muted: #4F5866; --frame: #0F1A2B; --good: #1F7A4D;
+  --good-soft: #E6F4EC; --bad: #B42318; --bad-soft: #FDECEA;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: Inter, "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--frame); color: var(--ink); font-family: var(--body); overflow: hidden;
+  box-sizing: border-box; padding-block: 12px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+#viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
+#stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform-origin: 50% 50%;
+  background: var(--paper); overflow: hidden; border-radius: 8px; }
+.scene { position: absolute; inset: 0; opacity: 0; visibility: hidden; }
+[data-in] { opacity: 0; }
+.abs { position: absolute; }
+.eyebrow { font: 700 26px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--maroon); }
+.h1 { font: 700 72px/1.08 var(--display); letter-spacing: -.01em; text-wrap: balance; }
+.lead { font: 400 36px/1.35 var(--body); color: var(--muted); }
+.icon { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* persistent chrome */
+#brand { position: absolute; left: 120px; top: 44px; font: 700 28px/1 var(--display); color: var(--ink); display: flex; gap: 14px; align-items: center; }
+#brand i { width: 14px; height: 14px; border-radius: 50%; background: var(--maroon); display: block; }
+#chapters { position: absolute; left: 120px; right: 120px; bottom: 34px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; }
+.chap { display: flex; flex-direction: column; gap: 10px; font: 600 22px/1 var(--body); color: #8A93A1; }
+.chap.on { color: var(--ink); }
+.chap .bar { height: 8px; border-radius: 4px; background: var(--mist); overflow: hidden; }
+.chap .bar b { display: block; height: 100%; width: 0; background: var(--maroon); }
+
+/* title + outro */
+.center { position: absolute; left: 0; right: 0; text-align: center; }
+.title-big { font: 700 168px/1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.title-sub { font: 600 60px/1.1 var(--display); color: var(--maroon); }
+.chips { display: flex; gap: 22px; justify-content: center; }
+.chip { font: 600 30px/1 var(--body); padding: 18px 28px; border-radius: 999px; background: var(--mist); color: var(--ink); white-space: nowrap; }
+.panel.human .chip { font-size: 26px; padding: 14px 22px; }
+.chip.maroon { background: var(--maroon); color: #fff; }
+.chip.orange { background: var(--orange-soft); color: var(--orange); }
+.chip.good { background: var(--good-soft); color: var(--good); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* problem */
+#pile { position: absolute; left: 930px; top: 230px; width: 870px; height: 620px; }
+.lcard { position: absolute; width: 150px; height: 96px; }
+.lcard .face { width: 100%; height: 100%; box-sizing: border-box; border-radius: 12px; background: #fff; border: 2px solid var(--line);
+  padding: 14px; display: flex; flex-direction: column; gap: 9px; transition: opacity .6s, border-color .6s, box-shadow .6s; box-shadow: 0 4px 14px rgba(27,42,65,.08); }
+.lcard .face i { display: block; height: 10px; border-radius: 5px; background: var(--mist); }
+.lcard .face i:first-child { width: 80%; background: #D7DCE4; }
+.lcard .face i:nth-child(2) { width: 60%; } .lcard .face i:nth-child(3) { width: 70%; }
+.lcard .tag { position: absolute; right: -10px; top: -14px; font: 700 18px/1 var(--body); padding: 8px 12px; border-radius: 999px; opacity: 0; transition: opacity .4s; }
+.lcard .tag.scam { background: var(--bad); color: #fff; }
+.lcard.dim .face { opacity: .3; }
+.lcard.scammed .tag.scam { opacity: 1; }
+.lcard.fade .face { opacity: .12; } .lcard.fade .tag { opacity: 0 !important; }
+.lcard.fit .face { opacity: 1; border-color: var(--good); border-width: 4px; box-shadow: 0 8px 28px rgba(31,122,77,.28); }
+.bul { display: flex; gap: 22px; align-items: center; font: 500 40px/1.25 var(--body); }
+.bul span.dot { width: 18px; height: 18px; border-radius: 50%; background: var(--maroon); flex: none; }
+.band { position: absolute; left: 0; right: 0; bottom: 120px; height: 150px; background: var(--maroon); color: #fff;
+  display: flex; align-items: center; justify-content: center; font: 600 44px/1.2 var(--display); text-align: center; padding: 0 120px; }
+
+/* team */
+.pcard { position: absolute; box-sizing: border-box; border: 2px solid var(--line); border-radius: 18px; background: #fff;
+  padding: 26px 30px; display: flex; flex-direction: column; gap: 16px; transition: border-color .4s, box-shadow .4s, background .4s; }
+.pcard.on { border-color: var(--maroon); border-width: 4px; padding: 24px 28px; box-shadow: 0 14px 40px rgba(134,31,65,.18); background: #FFFCFD; }
+.pcard .row { display: flex; gap: 20px; align-items: center; }
+.pcard .ic { width: 76px; height: 76px; border-radius: 50%; background: var(--maroon-soft); color: var(--maroon); flex: none; display: grid; place-items: center; }
+.pcard .ic svg { width: 44px; height: 44px; }
+.pcard .nm { font: 700 40px/1.05 var(--display); }
+.pcard .tech { font: 600 21px/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
+.pcard .ds { font: 400 28px/1.32 var(--body); color: var(--ink); }
+.pcard.manager { background: var(--ink); color: #fff; border-color: var(--ink); }
+.pcard.manager .ic { background: rgba(255,255,255,.12); color: #fff; }
+.pcard.manager .tech { color: #C9D2E0; }
+.pcard.manager .ds { color: #fff; }
+.pcard.manager.on { border-color: var(--maroon); background: var(--ink); }
+.pcard.after { border-style: dashed; }
+
+/* stores */
+.scard { position: absolute; top: 300px; width: 390px; height: 470px; box-sizing: border-box; border-radius: 18px; background: var(--mist);
+  padding: 34px 32px; display: flex; flex-direction: column; gap: 22px; }
+.scard .ic { width: 96px; height: 96px; border-radius: 22px; background: #fff; color: var(--ink); display: grid; place-items: center; }
+.scard .ic svg { width: 56px; height: 56px; }
+.scard .nm { font: 700 38px/1.1 var(--display); min-height: 84px; }
+.scard .ds { font: 400 28px/1.35 var(--body); color: var(--ink); }
+.foot { position: absolute; left: 120px; right: 120px; top: 830px; font: 600 32px/1.3 var(--body); color: var(--maroon); display: flex; gap: 18px; align-items: center; }
+.foot svg { width: 40px; height: 40px; flex: none; }
+
+/* loop */
+#steps { position: absolute; left: 120px; top: 236px; width: 640px; display: flex; flex-direction: column; gap: 12px; }
+.step { display: flex; gap: 22px; align-items: center; padding: 12px 18px; border-radius: 14px; font: 500 32px/1.1 var(--body); color: #7A8493; transition: background .35s, color .35s; }
+.step b { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font: 700 26px/1 var(--display); background: var(--mist); color: var(--muted); flex: none; transition: background .35s, color .35s; }
+.step.done { color: var(--ink); }
+.step.done b { background: var(--maroon-soft); color: var(--maroon); }
+.step.on { background: var(--maroon); color: #fff; font-weight: 700; }
+.step.on b { background: #fff; color: var(--maroon); }
+.step.human.on { background: var(--orange); }
+.step.human.on b { color: var(--orange); }
+.panel { position: absolute; left: 860px; top: 236px; width: 940px; height: 690px; box-sizing: border-box; border-radius: 22px; background: var(--mist); padding: 44px 50px; display: flex; flex-direction: column; gap: 22px; }
+.panel .k { font: 700 24px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--maroon); }
+.panel .t { font: 700 54px/1.1 var(--display); text-wrap: balance; }
+.panel .x { font: 400 32px/1.4 var(--body); color: var(--ink); }
+.panel .vis { margin-top: auto; height: 250px; position: relative; }
+.panel .chip { background: #fff; box-shadow: 0 4px 14px rgba(27,42,65,.08); }
+.panel .chip.orange { background: #fff; color: var(--orange); border: 2px solid var(--orange); }
+.panel .chip.good { background: var(--good-soft); }
+.panel.human { background: var(--orange-soft); }
+.panel.human .k { color: var(--orange); }
+.form { width: 520px; background: #fff; border-radius: 16px; padding: 24px 28px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 6px 20px rgba(27,42,65,.08); }
+.form .fr { display: flex; gap: 16px; align-items: center; font: 500 22px/1 var(--body); color: var(--muted); }
+.form .fr i { flex: 1; height: 14px; border-radius: 7px; background: var(--mist); }
+.btn { align-self: flex-start; font: 700 24px/1 var(--body); background: var(--maroon); color: #fff; padding: 14px 22px; border-radius: 10px; }
+.mini { background: #fff; border-radius: 16px; padding: 22px 26px; box-shadow: 0 6px 20px rgba(27,42,65,.08); font: 600 26px/1.3 var(--body); }
+.mini i { display: block; height: 12px; border-radius: 6px; background: var(--mist); margin-top: 12px; }
+.big-eq { font: 700 96px/1 var(--display); color: var(--maroon); }
+.funnel-top { font: 700 34px/1 var(--display); color: var(--muted); }
+.funnel-num { font: 700 110px/1 var(--display); color: var(--maroon); }
+.drop { font: 600 22px/1 var(--body); padding: 10px 16px; border-radius: 999px; background: var(--bad-soft); color: var(--bad); white-space: nowrap; }
+.doc { width: 560px; background: #fff; border-radius: 16px; padding: 26px 30px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 6px 20px rgba(27,42,65,.08); }
+.doc i { display: block; height: 14px; border-radius: 7px; background: var(--mist); }
+.doc .q { background: var(--maroon-soft); border-left: 6px solid var(--maroon); border-radius: 6px; padding: 12px 16px; font: 600 24px/1.3 var(--body); color: var(--maroon); }
+.who { display: flex; flex-direction: column; align-items: center; gap: 12px; font: 700 28px/1 var(--display); }
+.who .ic { width: 110px; height: 110px; border-radius: 50%; background: #fff; color: var(--maroon); display: grid; place-items: center; box-shadow: 0 6px 20px rgba(27,42,65,.08); }
+.who .ic svg { width: 62px; height: 62px; }
+.meter { display: flex; flex-direction: column; gap: 12px; width: 250px; font: 600 24px/1.2 var(--body); }
+.meter .tr { height: 22px; border-radius: 11px; background: #fff; overflow: hidden; }
+.meter .tr b { display: block; height: 100%; background: var(--maroon); border-radius: 11px; }
+
+/* example */
+.prof { position: absolute; left: 120px; top: 270px; width: 520px; box-sizing: border-box; background: var(--ink); color: #fff; border-radius: 20px; padding: 34px 36px; display: flex; flex-direction: column; gap: 18px; }
+.prof .k { font: 700 22px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: #C9D2E0; }
+.prof .r { font: 500 30px/1.25 var(--body); display: flex; gap: 14px; align-items: flex-start; }
+.prof .r::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #E9B8C8; margin-top: 13px; flex: none; }
+.ev { position: absolute; left: 690px; width: 520px; box-sizing: border-box; border-radius: 16px; padding: 22px 26px; font: 500 28px/1.3 var(--body); background: var(--mist); display: flex; gap: 18px; align-items: flex-start; }
+.ev em { font-style: normal; font: 700 22px/1 var(--body); letter-spacing: .1em; text-transform: uppercase; display: block; margin-bottom: 8px; color: var(--muted); }
+.ev.bad em { color: var(--bad); } .ev.good em { color: var(--good); }
+.res { position: absolute; left: 1260px; top: 250px; width: 540px; box-sizing: border-box; background: #fff; border: 3px solid var(--good); border-radius: 22px; padding: 32px 34px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 44px rgba(27,42,65,.14); }
+.res .nm { font: 700 38px/1.1 var(--display); }
+.res .kv { display: flex; justify-content: space-between; align-items: center; font: 500 26px/1 var(--body); color: var(--muted); padding: 8px 0; border-bottom: 1px solid var(--mist); }
+.res .kv i { width: 150px; height: 14px; border-radius: 7px; background: var(--mist); display: block; }
+.res .tip { font: 600 25px/1.3 var(--body); padding: 14px 18px; border-radius: 12px; background: var(--good-soft); color: var(--good); }
+.res .flag { font: 600 25px/1.3 var(--body); padding: 14px 18px; border-radius: 12px; background: var(--orange-soft); color: var(--orange); }
+.illus { font: 500 20px/1 var(--body); color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+
+/* controls (appear on mouse move) */
+#ctl { position: absolute; right: 18px; bottom: 18px; display: flex; gap: 10px; opacity: 0; transition: opacity .3s; z-index: 5; }
+#ctl.show { opacity: 1; }
+#ctl button { font: 600 15px/1 var(--body); color: #fff; background: rgba(15,26,43,.85); border: 1px solid rgba(255,255,255,.25); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+#ctl button:focus-visible { outline: 3px solid #E9B8C8; outline-offset: 2px; }
+</style>
+
+<div id="viewport">
+<div id="stage" role="img" aria-label="Animated overview of ScholarMatch: the problem, the agent team, what they work from, the step-by-step search, and an example result.">
+
+  <div id="brand" data-chrome><i></i>ScholarMatch</div>
+
+  <!-- 1 · TITLE -->
+  <section class="scene" id="s-title">
+    <div class="center" style="top:250px" data-in="0.2"><span class="eyebrow">Virginia Tech · ADS 5984 Agentic AI in Practice</span></div>
+    <div class="center title-big" style="top:330px" data-in="0.4" data-a="pop">ScholarMatch</div>
+    <div class="center title-sub" style="top:530px" data-in="1.0" data-a="up">Scholarships you can actually win</div>
+    <div class="center lead" style="top:630px" data-in="1.6" data-a="up">For students in Virginia, North Carolina and South Carolina</div>
+    <div class="center" style="top:760px"><div class="chips">
+      <span class="chip" data-in="2.4" data-a="up">Rules decide who qualifies</span>
+      <span class="chip maroon" data-in="2.8" data-a="up">AI helpers judge the fit</span>
+      <span class="chip" data-in="3.2" data-a="up">Code does the math</span>
+    </div></div>
+  </section>
+
+  <!-- 2 · PROBLEM -->
+  <section class="scene" id="s-problem">
+    <div class="abs eyebrow" style="left:120px;top:130px" data-in="0.1">The problem</div>
+    <div class="abs h1" style="left:120px;top:180px;width:760px" data-in="0.2" data-a="up">Thousands of scholarship listings, scattered everywhere</div>
+    <div class="abs" style="left:120px;top:500px;width:760px;display:flex;flex-direction:column;gap:34px">
+      <div class="bul" data-in="1.0" data-a="left"><span class="dot"></span>Spread across many websites</div>
+      <div class="bul" data-in="2.9" data-a="left"><span class="dot"></span>Some are scams</div>
+      <div class="bul" data-in="3.7" data-a="left"><span class="dot"></span>Many you don’t qualify for</div>
+    </div>
+    <div id="pile"></div>
+    <div class="band" data-in="5.0" data-a="up">ScholarMatch turns one student profile into a short list of scholarships they qualify for.</div>
+  </section>
+
+  <!-- 3 · TEAM -->
+  <section class="scene" id="s-team">
+    <div class="abs eyebrow" style="left:120px;top:120px" data-in="0.1">Meet the team</div>
+    <div class="abs h1" style="left:120px;top:162px;font-size:60px" data-in="0.2" data-out="21.6" data-a="up">A manager program and six AI helpers</div>
+    <div class="abs h1" style="left:120px;top:162px;font-size:60px;color:var(--maroon)" data-in="22" data-a="up">The Manager checks every answer</div>
+
+    <div class="pcard manager" style="left:120px;top:262px;width:1680px;height:150px;flex-direction:row;align-items:center;gap:30px" data-in="1.0" data-a="up" data-on="1,4">
+      <div class="ic"><svg class="icon" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3h6v3H9z"/><path d="M8.5 13l2.2 2.2 4.6-4.6"/></svg></div>
+      <div style="width:470px"><div class="nm">The Manager</div><div class="tech">Supervisor · ordinary code</div></div>
+      <div class="ds" style="font-size:30px;flex:1">Hands each scholarship to the helpers in turn, checks every answer, and sends it back with notes if something is wrong.</div>
+    </div>
+
+    <div class="pcard" style="left:120px;top:440px;width:536px;height:250px" data-in="4" data-a="up" data-on="4,7">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 12h7M9 16h5"/></svg></div><div><div class="nm">The Reader</div><div class="tech">Extractor</div></div></div>
+      <div class="ds">Reads one listing and writes down its rules, copying the exact words.</div>
+    </div>
+    <div class="pcard" style="left:692px;top:440px;width:536px;height:250px" data-in="7" data-a="up" data-on="7,10">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg></div><div><div class="nm">The Gatekeeper</div><div class="tech">Filter</div></div></div>
+      <div class="ds">Catches limits the rule book missed, and removes a scholarship only with quoted proof.</div>
+    </div>
+    <div class="pcard" style="left:1264px;top:440px;width:536px;height:250px" data-in="10" data-a="up" data-on="10,13">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M12 4v16M7 20h10M4 8h16"/><path d="M4 8l-2.5 6a2.5 2.5 0 005 0zM20 8l-2.5 6a2.5 2.5 0 005 0z"/></svg></div><div><div class="nm">The Judge</div><div class="tech">Scorer</div></div></div>
+      <div class="ds">Rates how well you fit: strong, moderate, weak or none, and shows the evidence.</div>
+    </div>
+    <div class="pcard" style="left:120px;top:718px;width:536px;height:250px" data-in="13" data-a="up" data-on="13,16">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/><path d="M8 10.5l2 2 3.5-3.5"/></svg></div><div><div class="nm">The Fact-checker</div><div class="tech">Verifier</div></div></div>
+      <div class="ds">Tries to prove the Judge wrong, without seeing how the Judge decided.</div>
+    </div>
+    <div class="pcard after" style="left:692px;top:718px;width:536px;height:250px" data-in="16" data-a="up" data-on="16,19">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg></div><div><div class="nm">The Advisor</div><div class="tech">Chat agent</div></div></div>
+      <div class="ds">After the search, answers your questions about one scholarship.</div>
+    </div>
+    <div class="pcard after" style="left:1264px;top:718px;width:536px;height:250px" data-in="19" data-a="up" data-on="19,22">
+      <div class="row"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg></div><div><div class="nm">The Essay reader</div><div class="tech">Essay summarizer</div></div></div>
+      <div class="ds">Turns your past essays into short themes, with your name and town removed.</div>
+    </div>
+  </section>
+
+  <!-- 4 · STORES -->
+  <section class="scene" id="s-stores">
+    <div class="abs eyebrow" style="left:120px;top:130px" data-in="0.1">What they work from</div>
+    <div class="abs h1" style="left:120px;top:172px" data-in="0.2" data-a="up">Four sources of knowledge</div>
+    <div class="scard" style="left:120px" data-in="1.0" data-a="up">
+      <div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="M15.5 5.2l3.4-.9 3.6 14.8-3.4.9z"/></svg></div>
+      <div class="nm">Scholarship library</div>
+      <div class="ds">Listings from Virginia Tech, USC, ECU, the SC Commission on Higher Education and counselor websites.</div>
+    </div>
+    <div class="scard" style="left:550px" data-in="2.6" data-a="up">
+      <div class="ic"><svg class="icon" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 18.5h.01M12 18.5h.01M16 18.5h.01"/></svg></div>
+      <div class="nm">Rule book and calculator</div>
+      <div class="ds">Fixed eligibility rules, a scam screen and the scoring math, all written in code.</div>
+    </div>
+    <div class="scard" style="left:980px" data-in="4.2" data-a="up">
+      <div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M5 4h12a2 2 0 012 2v14H7a2 2 0 01-2-2z"/><path d="M5 18a2 2 0 012-2h12"/><path d="M9 8h6M9 11h4"/></svg></div>
+      <div class="nm">Memory and logbook</div>
+      <div class="ds">Past results, saved scholarships, chats, and a record of every decision the helpers make.</div>
+    </div>
+    <div class="scard" style="left:1410px" data-in="5.8" data-a="up">
+      <div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M20 11a8 8 0 00-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0014.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg></div>
+      <div class="nm">Answer memory</div>
+      <div class="ds">Ask the same question twice and the saved answer comes back, with no new AI call.</div>
+    </div>
+    <div class="foot" data-in="7.2" data-a="up"><svg class="icon" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>The AI helpers never see your name, contact details, town or school.</div>
+  </section>
+
+  <!-- 5 · LOOP -->
+  <section class="scene" id="s-loop">
+    <div class="abs eyebrow" style="left:120px;top:120px" data-in="0.1">How it works</div>
+    <div class="abs h1" style="left:120px;top:160px;font-size:58px" data-in="0.2" data-a="up">One search, step by step</div>
+    <div class="abs lead" style="left:860px;top:174px;width:940px;text-align:right;font-size:28px;color:var(--maroon);font-weight:600" data-in="0.6">After 2 tries, the Manager picks the safer answer</div>
+    <div id="steps">
+      <div class="step" data-in="0.5" data-on="1.5,4.65" data-done="4.65"><b>1</b>You ask</div>
+      <div class="step" data-in="0.6" data-on="4.65,7.8" data-done="7.8"><b>2</b>Check for a repeat</div>
+      <div class="step" data-in="0.7" data-on="7.8,10.95" data-done="10.95"><b>3</b>Rules first</div>
+      <div class="step" data-in="0.8" data-on="10.95,14.1" data-done="14.1"><b>4</b>Read the rules</div>
+      <div class="step" data-in="0.9" data-on="14.1,17.25" data-done="17.25"><b>5</b>Screen with proof</div>
+      <div class="step" data-in="1.0" data-on="17.25,20.4" data-done="20.4"><b>6</b>Judge and fact-check</div>
+      <div class="step" data-in="1.1" data-on="20.4,23.55" data-done="23.55"><b>7</b>Do the math</div>
+      <div class="step human" data-in="1.2" data-on="23.55,99"><b>8</b>You decide</div>
+    </div>
+
+    <div class="panel" data-in="1.5" data-out="4.65" data-a="up">
+      <div class="k">Step 1 of 8</div><div class="t">Fill in a profile and press Find</div>
+      <div class="x">State, school, year, GPA, major, activities, financial need and past essays.</div>
+      <div class="vis"><div class="form">
+        <div class="fr">State<i></i></div><div class="fr">GPA<i></i></div><div class="fr">Major<i></i></div>
+        <div class="btn">Find my scholarships</div></div></div>
+    </div>
+    <div class="panel" data-in="4.65" data-out="7.8" data-a="up">
+      <div class="k">Step 2 of 8</div><div class="t">A repeat request gets the saved answer</div>
+      <div class="x">If nothing changed, the saved result comes straight back, so answers stay consistent.</div>
+      <div class="vis" style="display:flex;gap:40px;align-items:center">
+        <div class="mini" style="width:300px">Today’s search<i></i><i style="width:70%"></i></div>
+        <div class="big-eq">=</div>
+        <div class="mini" style="width:300px">Saved result<i></i><i style="width:70%"></i></div>
+      </div>
+    </div>
+    <div class="panel" data-in="7.8" data-out="10.95" data-a="up">
+      <div class="k">Step 3 of 8</div><div class="t">Rules cut the list before any AI</div>
+      <div class="x">The rules remove scams, past deadlines, wrong-state awards, loans and GPA misses. The best 30 move on.</div>
+      <div class="vis" style="display:flex;gap:46px;align-items:center">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;width:330px">
+          <div class="funnel-top">Thousands</div>
+          <svg viewBox="0 0 300 120" width="300" height="120"><path d="M10 6h280l-100 100h-80z" fill="#F6E9EE" stroke="#861F41" stroke-width="4" stroke-linejoin="round"/></svg>
+          <div class="funnel-num" data-in="10.0" data-a="pop">30</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;width:420px">
+          <span class="drop" data-in="8.4">✕ Scams</span><span class="drop" data-in="8.7">✕ Expired</span>
+          <span class="drop" data-in="9.0">✕ Wrong state</span><span class="drop" data-in="9.3">✕ Loans</span>
+          <span class="drop" data-in="9.6">✕ GPA too low</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel" data-in="10.95" data-out="14.1" data-a="up">
+      <div class="k">Step 4 of 8 · six at a time</div><div class="t">The Reader writes down each one’s rules</div>
+      <div class="x">Every rule must copy the listing’s exact words. A rule without a quote goes back once; after that, ScholarMatch uses the rule book’s version.</div>
+      <div class="vis"><div class="doc"><i></i><i style="width:82%"></i>
+        <div class="q" data-in="11.8">“exact words from the listing”</div><i style="width:66%"></i></div></div>
+    </div>
+    <div class="panel" data-in="14.1" data-out="17.25" data-a="up">
+      <div class="k">Step 5 of 8</div><div class="t">Removing a scholarship takes proof</div>
+      <div class="x">The Gatekeeper must quote the listing to remove a scholarship. If it can’t, the scholarship stays, marked “Check”.</div>
+      <div class="vis" style="display:flex;gap:30px;align-items:center">
+        <div class="mini" style="width:380px;position:relative">A scholarship<i></i><i style="width:60%"></i>
+          <span class="chip orange" style="position:absolute;right:-20px;top:-22px;font-size:24px;padding:12px 18px" data-in="15.0" data-a="pop">Check</span></div>
+        <div class="chip good" data-in="15.4">Kept, but flagged</div>
+      </div>
+    </div>
+    <div class="panel" data-in="17.25" data-out="20.4" data-a="up">
+      <div class="k">Step 6 of 8</div><div class="t">The Judge rates the fit and the Fact-checker tries to disprove it</div>
+      <div class="x">If they disagree, the Judge tries again, up to 2 rounds. If they still disagree, the Manager takes the safer rating and adds a flag.</div>
+      <div class="vis" style="display:flex;gap:30px;align-items:center;justify-content:flex-start">
+        <div class="who"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><path d="M12 4v16M7 20h10M4 8h16"/><path d="M4 8l-2.5 6a2.5 2.5 0 005 0zM20 8l-2.5 6a2.5 2.5 0 005 0z"/></svg></div>Judge</div>
+        <div style="display:flex;flex-direction:column;gap:12px;align-items:center">
+          <span class="chip" style="font-size:24px" data-in="18.0">Round 1 ⇄</span>
+          <span class="chip" style="font-size:24px" data-in="18.6">Round 2 ⇄</span>
+        </div>
+        <div class="who"><div class="ic"><svg class="icon" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/><path d="M8 10.5l2 2 3.5-3.5"/></svg></div>Fact-checker</div>
+        <span class="chip orange" style="font-size:24px" data-in="19.2" data-a="pop">Safer rating + flag</span>
+      </div>
+    </div>
+    <div class="panel" data-in="20.4" data-out="23.55" data-a="up">
+      <div class="k">Step 7 of 8</div><div class="t">Code does the math</div>
+      <div class="x">Fixed formulas work out the estimated chance of winning, the hours of effort and the expected value.</div>
+      <div class="vis" style="display:flex;gap:36px;align-items:flex-end">
+        <div class="meter">Estimated chance<div class="tr"><b data-grow="21.0,0.45"></b></div></div>
+        <div class="meter">Effort to apply<div class="tr"><b data-grow="21.3,0.7"></b></div></div>
+        <div class="meter">Expected value<div class="tr"><b data-grow="21.6,0.55"></b></div></div>
+      </div>
+    </div>
+    <div class="panel human" data-in="23.55" data-a="up">
+      <div class="k">Step 8 of 8 · the student</div><div class="t">You decide what to apply for</div>
+      <div class="x">Sort the list, check the flags, save favorites, ask the Advisor, or change your profile and run it again.</div>
+      <div class="vis" style="display:flex;gap:18px;align-items:center">
+        <span class="chip orange" data-in="24.2">Check flags</span><span class="chip orange" data-in="24.5">Save</span>
+        <span class="chip orange" data-in="24.8">Ask the Advisor</span><span class="chip orange" data-in="25.1">Run again</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · EXAMPLE -->
+  <section class="scene" id="s-example">
+    <div class="abs eyebrow" style="left:120px;top:120px" data-in="0.1">Example</div>
+    <div class="abs h1" style="left:120px;top:160px;font-size:60px" data-in="0.2" data-a="up">What a student gets back</div>
+    <div class="prof" data-in="0.8" data-a="left">
+      <div class="k">The student</div>
+      <div class="r">Virginia high school senior</div>
+      <div class="r">GPA 3.6</div>
+      <div class="r">Plans to study engineering at Virginia Tech</div>
+      <div class="r">Has financial need</div>
+      <div class="r">Past essay about robotics club</div>
+    </div>
+    <div class="ev" style="top:270px" data-in="2.2" data-a="up"><div><em>Rules</em>Rules cut the list to 30, removing graduate-only, out-of-state and expired awards.</div></div>
+    <div class="ev bad" style="top:470px" data-in="3.6" data-a="up"><div><em>Removed</em>A members-only award, with the listing’s words as proof.</div></div>
+    <div class="ev good" style="top:640px" data-in="5.0" data-a="up"><div><em>Strong fit</em>An engineering award. The Judge cites the listing and the robotics essay.</div></div>
+    <div class="res" data-in="6.4" data-a="pop">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="chip good" style="font-size:22px;padding:10px 16px">Strong fit</span><span class="illus">Illustration</span></div>
+      <div class="nm">An engineering award</div>
+      <div class="kv">Amount<i></i></div><div class="kv">Deadline<i></i></div>
+      <div class="kv">Estimated chance<i></i></div><div class="kv">Effort to apply<i></i></div>
+      <div class="tip">Essay tip: reuse your robotics essay</div>
+      <div class="flag">“Verify” flag: one rule to check yourself</div>
+    </div>
+    <div class="abs" style="left:120px;right:120px;top:920px;text-align:center;font:600 34px/1.2 var(--display);color:var(--maroon)" data-in="8.0" data-a="up">Up to 15 ranked scholarships, each with a reason you can check.</div>
+  </section>
+
+  <!-- 7 · OUTRO -->
+  <section class="scene" id="s-outro">
+    <div class="center title-big" style="top:280px" data-in="0.2" data-a="pop">ScholarMatch</div>
+    <div class="center title-sub" style="top:480px" data-in="0.6">Scholarships you can actually win</div>
+    <div class="center" style="top:640px;font:700 48px/1 var(--display)" data-in="1.2">Jonah Schepers</div>
+    <div class="center lead" style="top:712px" data-in="1.6">ADS 5984 Agentic AI in Practice · Virginia Tech</div>
+  </section>
+
+  <div id="chapters" data-chrome>
+    <div class="chap"><span>The problem</span><div class="bar"><b></b></div></div>
+    <div class="chap"><span>The team</span><div class="bar"><b></b></div></div>
+    <div class="chap"><span>Knowledge</span><div class="bar"><b></b></div></div>
+    <div class="chap"><span>How it works</span><div class="bar"><b></b></div></div>
+    <div class="chap"><span>Example</span><div class="bar"><b></b></div></div>
+  </div>
+</div>
+<div id="ctl" aria-label="Playback controls">
+  <button id="b-play" type="button">Pause</button>
+  <button id="b-restart" type="button">Restart</button>
+  <button id="b-full" type="button">Full screen</button>
+</div>
+</div>
+
+<script>
+(function () {
+  const SCENES = [
+    { id: "s-title", d: 6 }, { id: "s-problem", d: 8, ch: 0 }, { id: "s-team", d: 24, ch: 1 },
+    { id: "s-stores", d: 9, ch: 2 }, { id: "s-loop", d: 27.5, ch: 3 }, { id: "s-example", d: 11, ch: 4 },
+    { id: "s-outro", d: 6 }
+  ];
+  let acc = 0;
+  for (const s of SCENES) { s.start = acc; acc += s.d; s.el = document.getElementById(s.id); }
+  const TOTAL = acc;
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Problem scene: a pile of listing cards, placed with a seeded random so every loop looks the same.
+  const pile = document.getElementById("pile");
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const SCAM = new Set([3, 11, 17, 26, 31]), FIT = new Set([8, 19, 29]);
+  for (let i = 0; i < 35; i++) {
+    const c = document.createElement("div");
+    const col = i % 7, row = Math.floor(i / 7);
+    c.className = "lcard";
+    c.style.left = (col * 118 + rnd() * 26) + "px";
+    c.style.top = (row * 100 + rnd() * 22) + "px";
+    c.style.rotate = ((rnd() - 0.5) * 12).toFixed(1) + "deg";
+    c.dataset.in = (0.3 + i * 0.06).toFixed(2);
+    c.dataset.a = "pop";
+    if (SCAM.has(i)) c.dataset.flag = "scammed@2.9";
+    else if (FIT.has(i)) c.dataset.flag = "fit@5.6";
+    else if (i % 3 === 0) c.dataset.flag = "dim@3.7";
+    if (!FIT.has(i)) c.dataset.flag2 = "fade@5.6";
+    c.innerHTML = '<div class="face"><i></i><i></i><i></i></div><span class="tag scam">Scam?</span>';
+    pile.appendChild(c);
+  }
+
+  for (const s of SCENES) s.items = [...s.el.querySelectorAll("[data-in],[data-on],[data-flag],[data-flag2],[data-count],[data-grow],[data-done]")];
+  const chaps = [...document.querySelectorAll(".chap")];
+  const chrome = [...document.querySelectorAll("[data-chrome]")];
+
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
+
+  function animate(el, lt) {
+    if (el.dataset.in !== undefined) {
+      const pin = ease((lt - parseFloat(el.dataset.in)) / 0.7);
+      const pout = el.dataset.out !== undefined ? ease((lt - parseFloat(el.dataset.out)) / 0.45) : 0;
+      el.style.opacity = (pin * (1 - pout)).toFixed(3);
+      if (!reduce) {
+        const a = el.dataset.a;
+        if (a === "up") el.style.transform = `translateY(${((1 - pin) * 36 - pout * 24).toFixed(1)}px)`;
+        else if (a === "left") el.style.transform = `translateX(${(-(1 - pin) * 50).toFixed(1)}px)`;
+        else if (a === "pop") el.style.transform = `scale(${(0.86 + 0.14 * pin).toFixed(3)})`;
+      }
+    }
+    if (el.dataset.on) {
+      const [a, b] = el.dataset.on.split(",").map(Number);
+      el.classList.toggle("on", lt >= a && lt < b);
+    }
+    if (el.dataset.done) el.classList.toggle("done", lt >= parseFloat(el.dataset.done));
+    for (const key of ["flag", "flag2"]) {
+      if (!el.dataset[key]) continue;
+      const [cls, at] = el.dataset[key].split("@");
+      el.classList.toggle(cls, lt >= parseFloat(at));
+    }
+    if (el.dataset.grow) {
+      const [at, w] = el.dataset.grow.split(",").map(Number);
+      el.style.width = (ease((lt - at) / 0.9) * w * 100).toFixed(1) + "%";
+    }
+    if (el.dataset.count) {
+      const [a, b] = el.dataset.count.split(",").map(Number);
+      const p = ease((lt - a) / (b - a));
+      el.textContent = p >= 1 ? "30" : Math.round(2000 - p * 1970).toLocaleString();
+    }
+  }
+
+  function render(t) {
+    let cur = null;
+    for (const s of SCENES) {
+      const lt = t - s.start;
+      const inScene = lt >= -0.01 && lt <= s.d;
+      if (!inScene) { s.el.style.visibility = "hidden"; s.el.style.opacity = 0; continue; }
+      cur = s;
+      const fade = Math.min(1, (lt + 0.01) / 0.45, (s.d - lt) / 0.45);
+      s.el.style.visibility = "visible";
+      s.el.style.opacity = clamp(fade).toFixed(3);
+      for (const el of s.items) animate(el, lt);
+    }
+    const showChrome = cur && cur.ch !== undefined;
+    for (const c of chrome) c.style.opacity = showChrome ? 1 : 0;
+    chaps.forEach((c, i) => {
+      const s = SCENES.find((x) => x.ch === i);
+      const p = clamp((t - s.start) / s.d);
+      c.querySelector("b").style.width = (p * 100).toFixed(1) + "%";
+      c.classList.toggle("on", cur === s);
+    });
+  }
+
+  // Scale the 1920x1080 stage to fit.
+  const stage = document.getElementById("stage"), vp = document.getElementById("viewport");
+  function fit() {
+    const s = Math.min(vp.clientWidth / 1920, vp.clientHeight / 1080);
+    stage.style.transform = `translate(-50%, -50%) scale(${s})`;
+  }
+  window.addEventListener("resize", fit); fit();
+
+  // Clock with pause / restart; starts a little in so the first still frame shows the title.
+  // SPEED < 1 slows the whole loop evenly: 0.75 turns the 91-second timeline into about 2 minutes.
+  const SPEED = 0.75;
+  let offset = 2.4, playing = true, last = performance.now(), t = offset;
+  function tick(now) {
+    if (playing) { t = (t + SPEED * (now - last) / 1000) % TOTAL; }
+    last = now;
+    render(t);
+    requestAnimationFrame(tick);
+  }
+  render(t);
+  requestAnimationFrame(tick);
+  window.__seek = (x) => { t = ((x % TOTAL) + TOTAL) % TOTAL; render(t); };
+  window.__pause = () => { playing = false; playBtn.textContent = "Play"; };
+  window.__total = TOTAL;
+
+  const ctl = document.getElementById("ctl"), playBtn = document.getElementById("b-play");
+  let hideTimer = 0;
+  const showCtl = () => { ctl.classList.add("show"); clearTimeout(hideTimer); hideTimer = setTimeout(() => ctl.classList.remove("show"), 2500); };
+  document.addEventListener("mousemove", showCtl);
+  document.addEventListener("touchstart", showCtl, { passive: true });
+  playBtn.addEventListener("click", () => { playing = !playing; playBtn.textContent = playing ? "Pause" : "Play"; });
+  document.getElementById("b-restart").addEventListener("click", () => { t = 0; });
+  document.getElementById("b-full").addEventListener("click", () => {
+    const el = document.documentElement;
+    try {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    } catch (e) { /* not available here */ }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === " ") { e.preventDefault(); playBtn.click(); }
+    else if (e.key === "f" || e.key === "F") document.getElementById("b-full").click();
+    else if (e.key === "ArrowRight") t = (t + 5) % TOTAL;
+    else if (e.key === "ArrowLeft") t = (t - 5 + TOTAL) % TOTAL;
+  });
+  try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(() => {}); } catch (e) {}
+})();
+</script>
+</head></html>
